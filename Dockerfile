@@ -73,15 +73,20 @@ ENV PATH="${ANDROID_HOME}/platform-tools:${PATH}"
 # QEMU's ::1 GNSS chardev binds without sharing the host network namespace.
 ENV NONINTERACTIVE=true
 
-ARG VEGA_SDK_VERSION=0.22.5600
-ENV VEGA_SDK_VERSION=${VEGA_SDK_VERSION}
-
 # SKIP_VVD_INSTALL=false means the VVD emulator IS installed in this image.
 # Set to true at build time to produce a smaller build-only image.
 ARG SKIP_VVD_INSTALL=false
 ENV SKIP_VVD_INSTALL=${SKIP_VVD_INSTALL}
 
-RUN curl -fsSL https://sdk-installer.vega.labcollab.net/get_vvm.sh | bash
+# The SDK version is centralized in .sdk-version (single source of truth). The
+# installer (get_vvm.sh) reads VEGA_SDK_VERSION from the environment; we source it
+# from the file. Pass --build-arg VEGA_SDK_VERSION=x.y.z to override manually.
+# COPY sits right before the install so a version bump only busts this layer, not
+# the apt/node/platform-tools layers above it.
+ARG VEGA_SDK_VERSION=""
+COPY .sdk-version /tmp/.sdk-version
+RUN export VEGA_SDK_VERSION="${VEGA_SDK_VERSION:-$(cat /tmp/.sdk-version)}" \
+ && curl -fsSL https://sdk-installer.vega.labcollab.net/get_vvm.sh | bash
 
 ENV PATH="/root/vega/bin:${PATH}"
 

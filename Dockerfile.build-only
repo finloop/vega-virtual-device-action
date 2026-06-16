@@ -19,12 +19,14 @@ RUN apt-get update && \
 # Use this image for build, lint, and unit-test jobs where no device is needed.
 ENV NONINTERACTIVE=true
 
-ARG VEGA_SDK_VERSION=0.22.5600
-ENV VEGA_SDK_VERSION=${VEGA_SDK_VERSION}
-
 ENV SKIP_VVD_INSTALL=true
 
-RUN curl -fsSL https://sdk-installer.vega.labcollab.net/get_vvm.sh | bash
+# SDK version is centralized in .sdk-version (single source of truth); read it here.
+# Pass --build-arg VEGA_SDK_VERSION=x.y.z to override manually.
+ARG VEGA_SDK_VERSION=""
+COPY .sdk-version /tmp/.sdk-version
+RUN export VEGA_SDK_VERSION="${VEGA_SDK_VERSION:-$(cat /tmp/.sdk-version)}" \
+ && curl -fsSL https://sdk-installer.vega.labcollab.net/get_vvm.sh | bash
 
 ENV PATH="/root/vega/bin:${PATH}"
 

@@ -16,6 +16,7 @@ on:
       - 'scripts/**'
       - 'examples/argent-screenshot-test.sh'
       - 'Dockerfile'
+      - '.sdk-version'
       - '.github/workflows/vvd-action-test.yml'
   workflow_dispatch:
     inputs:

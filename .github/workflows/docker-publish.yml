@@ -16,6 +16,7 @@ on:
       - 'Dockerfile.build-only'
       - 'docker-bake.hcl'
       - '.dockerignore'
+      - '.sdk-version'
       - 'scripts/**'
       - '.github/workflows/docker-publish.yml'
 
@@ -24,8 +25,7 @@ env:
   # Full image = QEMU device host (SDK + VVD + GL stack); build = SDK only, no emulator.
   IMAGE_HOST: ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host
   IMAGE_BUILDER: ghcr.io/${{ github.repository_owner }}/vega-sdk-builder
-  # Pin the SDK version here. Update manually when a new SDK is released.
-  VEGA_SDK_VERSION: "0.22.5600"
+  # The SDK version is centralized in .sdk-version (read into a step output below).
 
 jobs:
   build:
@@ -38,6 +38,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Read SDK version
+        id: sdk
+        run: echo "version=$(cat .sdk-version)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
@@ -63,7 +67,7 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=sdk-${{ env.VEGA_SDK_VERSION }}
+            type=raw,value=sdk-${{ steps.sdk.outputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Metadata — build-only image
@@ -77,7 +81,7 @@ jobs:
             type=ref,event=pr
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=sdk-${{ env.VEGA_SDK_VERSION }}
+            type=raw,value=sdk-${{ steps.sdk.outputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
@@ -97,7 +101,6 @@ jobs:
           # don't overwrite each other's GHA cache manifest, and so the host
           # image's layers are shareable with vvd-action-test.yml (scope=host).
           set: |
-            *.args.VEGA_SDK_VERSION=${{ env.VEGA_SDK_VERSION }}
             full.cache-from=type=gha,scope=host
             full.cache-to=type=gha,mode=max,scope=host
             build-only.cache-from=type=gha,scope=builder
