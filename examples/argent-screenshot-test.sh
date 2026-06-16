@@ -30,6 +30,31 @@ npm install -g "$ARGENT_TARBALL" >/tmp/argent-install.log 2>&1 || { tail -20 /tm
 echo "argent $(argent --version)"
 echo "::endgroup::"
 
+echo "::group::Start Argent tool-server"
+# Run a persistent shared tool-server and point `argent run` at it via
+# ARGENT_TOOLS_URL. Without this, a cold `argent run` spawns its OWN ephemeral
+# server and blocks until that server's idle timeout (~30 min) before returning.
+# A shared server makes each `argent run` a fast client call AND keeps the Vega
+# inventory warm across calls (so the amazon-… serial classifies as Vega, not
+# Android → simulator-server).
+#
+# Start it fully detached with setsid + redirected fds: `argent server start
+# --detach` does NOT reliably return when stdout is a pipe (as in CI) and hangs
+# the job, so background the foreground server ourselves.
+ARGENT_PORT="${ARGENT_PORT:-3001}"
+setsid bash -c "argent server start --no-auth --idle-timeout 0 --port ${ARGENT_PORT}" \
+  </dev/null >/tmp/argent-server.log 2>&1 &
+export ARGENT_TOOLS_URL="http://127.0.0.1:${ARGENT_PORT}"
+ready=""
+for _ in $(seq 1 30); do
+  if curl -fsS -o /dev/null "http://127.0.0.1:${ARGENT_PORT}/tools" 2>/dev/null; then ready=1; break; fi
+  sleep 1
+done
+if [ -z "$ready" ]; then
+  echo "ERROR: Argent tool-server did not become ready"; cat /tmp/argent-server.log; exit 1
+fi
+echo "::endgroup::"
+
 echo "::group::adb sees the VVD"
 adb start-server >/dev/null 2>&1 || true
 timeout 60 adb wait-for-device || { echo "ERROR: adb never saw the device"; exit 1; }
