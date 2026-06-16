@@ -64,6 +64,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=sdk-${{ env.VEGA_SDK_VERSION }}
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Metadata — build-only image
         id: meta-build-only
@@ -77,6 +78,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=sdk-${{ env.VEGA_SDK_VERSION }}
+            type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
         uses: docker/bake-action@v6
