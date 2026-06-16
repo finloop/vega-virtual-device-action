@@ -29,7 +29,11 @@ target "full" {
     VEGA_SDK_VERSION = VEGA_SDK_VERSION
     SKIP_VVD_INSTALL = "false"
   }
-  tags = ["${IMAGE_HOST}:sdk-${VEGA_SDK_VERSION}"]
+  # Tags come from docker/metadata-action via the inherited _meta-full target in CI.
+  # Do NOT set `tags` here: a child target's tags REPLACE the inherited ones, which
+  # would drop the branch/semver/latest tags and publish only sdk-<version>.
+  # Local builds (no meta file) produce an untagged image; tag via
+  #   docker buildx bake --set "*.tags=${IMAGE_HOST}:local"
 }
 
 target "build-only" {
@@ -39,5 +43,5 @@ target "build-only" {
   args = {
     VEGA_SDK_VERSION = VEGA_SDK_VERSION
   }
-  tags = ["${IMAGE_BUILDER}:sdk-${VEGA_SDK_VERSION}"]
+  # See note on the `full` target: tags are inherited from _meta-build-only in CI.
 }
