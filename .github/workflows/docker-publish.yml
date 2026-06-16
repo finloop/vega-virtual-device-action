@@ -84,8 +84,15 @@ jobs:
             type=raw,value=sdk-${{ steps.sdk.outputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
 
+      # The Vega SDK installer sometimes transiently fails to download the VVM CLI
+      # binary (S3 returns a non-gzip XML error page instead of the tarball).
+      # The Dockerfiles already retry 3× internally; this job-level retry gives
+      # the server 3 more minutes to recover before we try the full build again.
+      # GHA layer cache means the retry only re-runs the failing SDK-install layer.
       - name: Build and push
+        id: build
         uses: docker/bake-action@v6
+        continue-on-error: true
         with:
           # On PRs, build ONLY the build-only image here. The host/full image is
           # built and smoke-tested by vvd-action-test.yml on PRs, so building it
@@ -100,6 +107,28 @@ jobs:
           # Per-target cache scopes (not a shared `*` scope) so the two images
           # don't overwrite each other's GHA cache manifest, and so the host
           # image's layers are shareable with vvd-action-test.yml (scope=host).
+          set: |
+            full.cache-from=type=gha,scope=host
+            full.cache-to=type=gha,mode=max,scope=host
+            build-only.cache-from=type=gha,scope=builder
+            build-only.cache-to=type=gha,mode=max,scope=builder
+
+      - name: Wait for SDK server to recover
+        if: steps.build.outcome == 'failure'
+        run: |
+          echo "First build failed — waiting 3 minutes before retry (SDK installer server flakiness)..."
+          sleep 180
+
+      - name: Build and push (retry)
+        if: steps.build.outcome == 'failure'
+        uses: docker/bake-action@v6
+        with:
+          targets: ${{ github.event_name == 'pull_request' && 'build-only' || 'default' }}
+          files: |
+            ./docker-bake.hcl
+            cwd://${{ steps.meta-full.outputs.bake-file }}
+            cwd://${{ steps.meta-build-only.outputs.bake-file }}
+          push: ${{ github.event_name != 'pull_request' }}
           set: |
             full.cache-from=type=gha,scope=host
             full.cache-to=type=gha,mode=max,scope=host
