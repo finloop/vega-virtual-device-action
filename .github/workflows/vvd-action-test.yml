@@ -20,10 +20,12 @@ on:
   workflow_dispatch:
     inputs:
       argent-tarball:
-        description: 'Argent release tarball URL to test'
+        description: 'Argent release tarball URL to test (blank = pinned default below)'
         required: false
-        default: 'https://github.com/finloop/argent/releases/download/v0.10.2-vega/swmansion-argent-0.10.2-vega.tgz'
+        default: ''
 
+# Single workflow-level source of the Argent tarball URL: a dispatch input
+# overrides it; pull_request runs (no inputs) fall back to this default.
 env:
   ARGENT_TARBALL: ${{ github.event.inputs.argent-tarball || 'https://github.com/finloop/argent/releases/download/v0.10.2-vega/swmansion-argent-0.10.2-vega.tgz' }}
 

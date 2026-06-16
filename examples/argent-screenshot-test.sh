@@ -118,13 +118,17 @@ PY
 captured=""
 for attempt in 1 2 3 4 5; do
   rm -f "$SHOT"
-  argent run screenshot --udid "$VEGA_SERIAL" --out "$SHOT" --json >/dev/null 2>&1 || true
+  # Keep the last attempt's output so a persistent failure is debuggable instead
+  # of just "missing/black" with no Argent error.
+  argent run screenshot --udid "$VEGA_SERIAL" --out "$SHOT" --json >/tmp/argent-screenshot.log 2>&1 || true
   if nonblack "$SHOT"; then captured=1; break; fi
   echo "attempt ${attempt}: screenshot missing/black; retrying..."
   sleep 5
 done
 if [ -z "$captured" ]; then
-  echo "ERROR: no non-black Argent screenshot"; exit 1
+  echo "ERROR: no non-black Argent screenshot"
+  echo "--- last 'argent run screenshot' output ---"; tail -30 /tmp/argent-screenshot.log
+  exit 1
 fi
 echo "OK: Argent Vega screenshot is non-black -> ${OUT_DIR}/argent-vega.png"
 echo "::endgroup::"

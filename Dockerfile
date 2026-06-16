@@ -51,9 +51,12 @@ ENV PATH="/opt/node/bin:${PATH}"
 # Android platform-tools (adb). Argent's Vega screenshot resolves a real `adb`
 # from $ANDROID_HOME/platform-tools and captures via `adb emu screenrecord`;
 # real adb auto-detects the VVD on tcp:5555 as emulator-5554.
+# Pinned to a versioned release (not platform-tools-latest) so the image is
+# reproducible and a future platform-tools change can't silently break capture.
+ARG PLATFORM_TOOLS_VERSION=r35.0.2
 ENV ANDROID_HOME=/opt/android
 ENV ANDROID_SDK_ROOT=/opt/android
-RUN curl -fsSL https://dl.google.com/android/repository/platform-tools-latest-linux.zip \
+RUN curl -fsSL "https://dl.google.com/android/repository/platform-tools_${PLATFORM_TOOLS_VERSION}-linux.zip" \
       -o /tmp/platform-tools.zip && \
     mkdir -p "${ANDROID_HOME}" && \
     python3 -c "import zipfile; zipfile.ZipFile('/tmp/platform-tools.zip').extractall('${ANDROID_HOME}')" && \
