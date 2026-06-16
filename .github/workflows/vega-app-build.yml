@@ -45,12 +45,6 @@ jobs:
           haskell: true
           large-packages: false
           swap-storage: false
-          # Keep Docker images: the runner pre-builds the comment-pr-with-images
-          # Docker action during job setup, and `docker image prune --all` (this
-          # action's default) would delete it, making the later `docker run` fail
-          # with "pull access denied". Pruning here reclaims ~nothing anyway (the
-          # 7GB host image is built in a later step).
-          docker-images: false
 
       - uses: actions/checkout@v4
 
@@ -108,19 +102,52 @@ jobs:
           path: artifacts/
           if-no-files-found: warn
 
-      # Post the screenshot as a PR comment. github_branch mode commits the PNG
-      # to webpage-screenshot-action-branch and embeds it via a github.com/.../raw
-      # URL, which renders inline for authorized viewers of THIS private repo
-      # (raw.githubusercontent.com would not — GitHub's image proxy can't auth to
-      # private content). Pinned to the 0.0.5 commit since it runs with a
-      # write-scoped token. continue-on-error so a commenting hiccup (e.g. a
-      # fork PR's read-only token) can't fail the build/run check itself.
-      # Skipped on workflow_dispatch — the action only supports pull_request.
+      # Post the screenshot as an inline PR comment. We host the PNG on a
+      # dedicated `ci-screenshots` branch via the Contents API (pure API calls —
+      # no local git, so no container "dubious ownership" issues) and embed it
+      # with a github.com/.../raw/<branch>/<path> URL. That URL renders inline
+      # for authorized viewers of THIS private repo; a raw.githubusercontent.com
+      # URL would not (GitHub's image proxy can't authenticate to private
+      # content). The comment is updated in place on re-runs via a hidden marker.
+      # continue-on-error so a commenting hiccup (e.g. a fork PR's read-only
+      # token) can't fail the build/run check itself.
       - name: Comment PR with screenshot
         if: always() && github.event_name == 'pull_request' && steps.vvd.outputs.screenshot != ''
         continue-on-error: true
-        uses: opengisch/comment-pr-with-images@501ce2dabd4744c4ccfad563f6af7b33d5a0779a # 0.0.5
-        with:
-          images: artifacts/vega-app.png
-          upload_to: github_branch
-          custom_attachment_msg: 'Vega sample app — built from the helloWorld template and run on the VVD'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.base_ref }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          SHOT: artifacts/vega-app.png
+          SHOT_BRANCH: ci-screenshots
+        run: |
+          set -euo pipefail
+          MARKER='<!-- vega-sample-app-screenshot -->'
+
+          # 1. Ensure the screenshots branch exists (created from the PR base).
+          if ! gh api "repos/$REPO/branches/$SHOT_BRANCH" >/dev/null 2>&1; then
+            base_sha=$(gh api "repos/$REPO/git/refs/heads/$BASE_REF" --jq '.object.sha')
+            gh api "repos/$REPO/git/refs" -f ref="refs/heads/$SHOT_BRANCH" -f sha="$base_sha" >/dev/null
+          fi
+
+          # 2. Upload the PNG (unique path per run, so no existing-blob SHA needed).
+          dest="screenshots/pr-${PR}/vega-app-${GITHUB_RUN_ID}.png"
+          gh api -X PUT "repos/$REPO/contents/$dest" \
+            -f message="CI: Vega sample app screenshot for PR #${PR} (${SHA})" \
+            -f branch="$SHOT_BRANCH" \
+            -f content="$(base64 -w0 "$SHOT")" >/dev/null
+          url="https://github.com/$REPO/raw/$SHOT_BRANCH/$dest"
+
+          # 3. Create or update the PR comment (dedup via the hidden marker).
+          body=$(printf '%s\n### Vega sample app screenshot\n\nBuilt from the `helloWorld` template and run on the VVD (commit `%s`).\n\n![Vega sample app](%s)\n' "$MARKER" "$SHA" "$url")
+          cid=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                  --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | head -n1 || true)
+          if [ -n "$cid" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$cid" -f body="$body" >/dev/null
+            echo "Updated comment $cid -> $url"
+          else
+            gh api "repos/$REPO/issues/$PR/comments" -f body="$body" >/dev/null
+            echo "Created comment -> $url"
+          fi
