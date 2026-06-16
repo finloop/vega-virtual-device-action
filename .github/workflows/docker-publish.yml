@@ -9,6 +9,15 @@ on:
   pull_request:
     branches:
       - main
+    # Only rebuild the images on a PR when something image-relevant changes —
+    # not on README/docs-only PRs. (scripts/ is COPY'd into the full image.)
+    paths:
+      - 'Dockerfile'
+      - 'Dockerfile.build-only'
+      - 'docker-bake.hcl'
+      - '.dockerignore'
+      - 'scripts/**'
+      - '.github/workflows/docker-publish.yml'
 
 env:
   REGISTRY: ghcr.io
@@ -77,7 +86,12 @@ jobs:
             cwd://${{ steps.meta-full.outputs.bake-file }}
             cwd://${{ steps.meta-build-only.outputs.bake-file }}
           push: ${{ github.event_name != 'pull_request' }}
+          # Per-target cache scopes (not a shared `*` scope) so the two images
+          # don't overwrite each other's GHA cache manifest, and so the host
+          # image's layers are shareable with vvd-action-test.yml (scope=host).
           set: |
             *.args.VEGA_SDK_VERSION=${{ env.VEGA_SDK_VERSION }}
-            *.cache-from=type=gha
-            *.cache-to=type=gha,mode=max
+            full.cache-from=type=gha,scope=host
+            full.cache-to=type=gha,mode=max,scope=host
+            build-only.cache-from=type=gha,scope=builder
+            build-only.cache-to=type=gha,mode=max,scope=builder
