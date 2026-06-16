@@ -3,15 +3,11 @@ name: Test vega-virtual-device-action
 # Exercises vega-virtual-device-action end-to-end on a free GitHub-hosted runner:
 # builds the host image, enables KVM, boots the VVD via the action, captures the
 # "Kepler ready" home screen, and uploads it as an artifact.
-
+#
+# Runs on PRs only (plus manual dispatch): this is the sole place the host image
+# is built on a PR. On push to main / tags the host image is built and published
+# by docker-publish.yml, so re-building it here would just duplicate that work.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'vega-virtual-device-action/**'
-      - 'scripts/**'
-      - 'Dockerfile'
-      - '.github/workflows/vvd-action-test.yml'
   pull_request:
     branches: [main]
     paths:
@@ -46,10 +42,31 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       # Build the host image locally so the smoke test is self-contained and does
       # not depend on the GHCR package already existing / being public.
+      #
+      # Layer cache (type=gha) means the expensive layers — apt install + the
+      # Vega SDK download (get_vvm.sh) — are NOT rebuilt every run:
+      #   - cache-from scope=host  reuses the layers docker-publish.yml already
+      #     built and pushed to the GHA cache (same Dockerfile/SDK version).
+      #   - cache-from/to scope=host-ci keeps this workflow's own cache warm so
+      #     repeated pushes on the same branch only rebuild changed layers
+      #     (e.g. a scripts/ change), without contending with the publisher's writer.
       - name: Build vega-virtual-device-host image
-        run: docker build --platform=linux/amd64 -t vega-virtual-device-host:ci -f Dockerfile .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: vega-virtual-device-host:ci
+          cache-from: |
+            type=gha,scope=host
+            type=gha,scope=host-ci
+          cache-to: type=gha,mode=max,scope=host-ci
 
       - name: Boot VVD via the action
         id: vvd
