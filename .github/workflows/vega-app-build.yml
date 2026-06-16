@@ -45,6 +45,12 @@ jobs:
           haskell: true
           large-packages: false
           swap-storage: false
+          # Keep Docker images: the runner pre-builds the comment-pr-with-images
+          # Docker action during job setup, and `docker image prune --all` (this
+          # action's default) would delete it, making the later `docker run` fail
+          # with "pull access denied". Pruning here reclaims ~nothing anyway (the
+          # 7GB host image is built in a later step).
+          docker-images: false
 
       - uses: actions/checkout@v4
 
