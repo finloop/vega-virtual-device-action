@@ -56,10 +56,33 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       # Build the host image locally so the test is self-contained (does not
       # depend on the GHCR package already existing / being public).
+      #
+      # Shared GHA layer cache so the expensive layers (apt + Vega SDK download)
+      # are not rebuilt every run:
+      #   - cache-from scope=host     reuses docker-publish.yml's published layers
+      #   - cache-from scope=host-ci  reuses vvd-action-test.yml's host-image cache
+      #     (on a PR that touches the Dockerfile, that workflow builds the same
+      #     image first, so these layers are warm)
+      #   - cache-from/to scope=host-argent-ci is this workflow's own writer, so it
+      #     keeps its branch cache warm without clobbering the other writers.
       - name: Build vega-virtual-device-host image
-        run: docker build --platform=linux/amd64 -t vega-virtual-device-host:ci -f Dockerfile .
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: vega-virtual-device-host:ci
+          cache-from: |
+            type=gha,scope=host
+            type=gha,scope=host-ci
+            type=gha,scope=host-argent-ci
+          cache-to: type=gha,mode=max,scope=host-argent-ci
 
       - name: Boot VVD and run Argent screenshot
         id: vvd
