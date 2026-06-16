@@ -29,6 +29,7 @@ on:
 # overrides it; pull_request runs (no inputs) fall back to this default.
 env:
   ARGENT_TARBALL: ${{ github.event.inputs.argent-tarball || 'https://github.com/finloop/argent/releases/download/v0.10.2-vega/swmansion-argent-0.10.2-vega.tgz' }}
+  IMAGE_HOST_BASE: ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host-base
 
 jobs:
   vvd-smoke:
@@ -58,16 +59,22 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Build the host image locally so the smoke test is self-contained and does
-      # not depend on the GHCR package already existing / being public.
+      - name: Read SDK version
+        id: sdk
+        run: echo "version=$(cat .sdk-version)" >> "$GITHUB_OUTPUT"
+
+      # The wrapper Dockerfile is `FROM ${BASE_IMAGE}` + COPY scripts/. Nothing
+      # heavy runs here — the SDK + VVD layers come pre-built from GHCR. So this
+      # build is fast and never touches the flaky sdk-installer URL.
       #
-      # Layer cache (type=gha) means the expensive layers — apt install + the
-      # Vega SDK download (get_vvm.sh) — are NOT rebuilt every run:
-      #   - cache-from scope=host  reuses the layers docker-publish.yml already
-      #     built and pushed to the GHA cache (same Dockerfile/SDK version).
+      # Cache wiring:
+      #   - cache-from registry on the base image seeds the FROM layers from
+      #     GHCR directly when a fresh runner / evicted GHA cache means buildx
+      #     would otherwise re-pull them. This is the main cache hit.
+      #   - cache-from scope=host re-uses the wrapper layers already pushed
+      #     by docker-publish.yml from main.
       #   - cache-from/to scope=host-ci keeps this workflow's own cache warm so
-      #     repeated pushes on the same branch only rebuild changed layers
-      #     (e.g. a scripts/ change), without contending with the publisher's writer.
+      #     repeated pushes on the same branch are layer-cache hits.
       - name: Build vega-virtual-device-host image
         uses: docker/build-push-action@v6
         with:
@@ -76,7 +83,10 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: vega-virtual-device-host:ci
+          build-args: |
+            BASE_IMAGE=${{ env.IMAGE_HOST_BASE }}:sdk-${{ steps.sdk.outputs.version }}
           cache-from: |
+            type=registry,ref=${{ env.IMAGE_HOST_BASE }}:sdk-${{ steps.sdk.outputs.version }}
             type=gha,scope=host
             type=gha,scope=host-ci
           cache-to: type=gha,mode=max,scope=host-ci

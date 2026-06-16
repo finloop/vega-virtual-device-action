@@ -1,5 +1,13 @@
-name: Build and publish Vega SDK Docker images
+name: Build and publish vega-virtual-device-host (thin wrapper)
 
+# Publishes the THIN wrapper `vega-virtual-device-host` image: just
+# `FROM ${BASE_IMAGE}` + /scripts/. The heavy `vega-virtual-device-host-base`
+# (which contains the Vega SDK + VVD) is built by docker-base-publish.yml.
+#
+# Because there's no SDK install here, builds are fast and reliable: a fresh
+# runner only needs to pull the base image's layers (CDN-backed GHCR, not the
+# flaky sdk-installer.vega.labcollab.net), and warm GHA cache makes them a
+# layer-cache hit. PRs and docs-only changes never re-run get_vvm.sh.
 on:
   push:
     branches:
@@ -9,23 +17,21 @@ on:
   pull_request:
     branches:
       - main
-    # Only rebuild the images on a PR when something image-relevant changes —
-    # not on README/docs-only PRs. (scripts/ is COPY'd into the full image.)
+    # Rebuild on a PR only when something wrapper-relevant changes (scripts/
+    # is COPY'd into the image). SDK-version / base-Dockerfile changes are
+    # handled by docker-base-publish.yml.
     paths:
       - 'Dockerfile'
-      - 'Dockerfile.build-only'
       - 'docker-bake.hcl'
       - '.dockerignore'
-      - '.sdk-version'
       - 'scripts/**'
+      - '.sdk-version'
       - '.github/workflows/docker-publish.yml'
 
 env:
   REGISTRY: ghcr.io
-  # Full image = QEMU device host (SDK + VVD + GL stack); build = SDK only, no emulator.
   IMAGE_HOST: ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host
-  IMAGE_BUILDER: ghcr.io/${{ github.repository_owner }}/vega-sdk-builder
-  # The SDK version is centralized in .sdk-version (read into a step output below).
+  IMAGE_HOST_BASE: ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host-base
 
 jobs:
   build:
@@ -54,14 +60,12 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Generate tags/labels for each image separately, writing bake file
-      # overrides that docker/bake-action merges with docker-bake.hcl.
-      - name: Metadata — full image
-        id: meta-full
+      - name: Metadata — host (wrapper) image
+        id: meta-host
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_HOST }}
-          bake-target: _meta-full
+          bake-target: _meta-host
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -70,67 +74,22 @@ jobs:
             type=raw,value=sdk-${{ steps.sdk.outputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Metadata — build-only image
-        id: meta-build-only
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_BUILDER }}
-          bake-target: _meta-build-only
-          tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=sdk-${{ steps.sdk.outputs.version }}
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      # The Vega SDK installer sometimes transiently fails to download the VVM CLI
-      # binary (S3 returns a non-gzip XML error page instead of the tarball).
-      # The Dockerfiles already retry 3× internally; this job-level retry gives
-      # the server 3 more minutes to recover before we try the full build again.
-      # GHA layer cache means the retry only re-runs the failing SDK-install layer.
-      - name: Build and push
-        id: build
-        uses: docker/bake-action@v6
-        continue-on-error: true
-        with:
-          # On PRs, build ONLY the build-only image here. The host/full image is
-          # built and smoke-tested by vvd-action-test.yml on PRs, so building it
-          # here too would be a redundant second build of the same image. On
-          # push/tag this publisher is the sole builder and builds both (default).
-          targets: ${{ github.event_name == 'pull_request' && 'build-only' || 'default' }}
-          files: |
-            ./docker-bake.hcl
-            cwd://${{ steps.meta-full.outputs.bake-file }}
-            cwd://${{ steps.meta-build-only.outputs.bake-file }}
-          push: ${{ github.event_name != 'pull_request' }}
-          # Per-target cache scopes (not a shared `*` scope) so the two images
-          # don't overwrite each other's GHA cache manifest, and so the host
-          # image's layers are shareable with vvd-action-test.yml (scope=host).
-          set: |
-            full.cache-from=type=gha,scope=host
-            full.cache-to=type=gha,mode=max,scope=host
-            build-only.cache-from=type=gha,scope=builder
-            build-only.cache-to=type=gha,mode=max,scope=builder
-
-      - name: Wait for SDK server to recover
-        if: steps.build.outcome == 'failure'
-        run: |
-          echo "First build failed — waiting 3 minutes before retry (SDK installer server flakiness)..."
-          sleep 180
-
-      - name: Build and push (retry)
-        if: steps.build.outcome == 'failure'
+      # Thin wrapper build: FROM the SDK-version-pinned base + COPY /scripts/.
+      # No SDK install runs here, so the retry-and-sleep dance that used to live
+      # in this workflow moved to docker-base-publish.yml. A failure here is a
+      # real failure (e.g. broken Dockerfile / missing base tag).
+      - name: Build and push (wrapper)
         uses: docker/bake-action@v6
         with:
-          targets: ${{ github.event_name == 'pull_request' && 'build-only' || 'default' }}
+          targets: host
           files: |
             ./docker-bake.hcl
-            cwd://${{ steps.meta-full.outputs.bake-file }}
-            cwd://${{ steps.meta-build-only.outputs.bake-file }}
+            cwd://${{ steps.meta-host.outputs.bake-file }}
           push: ${{ github.event_name != 'pull_request' }}
+          # cache-from registry seeds layers from the published wrapper :latest
+          # when the GHA cache is cold (fresh runner, post-eviction).
           set: |
-            full.cache-from=type=gha,scope=host
-            full.cache-to=type=gha,mode=max,scope=host
-            build-only.cache-from=type=gha,scope=builder
-            build-only.cache-to=type=gha,mode=max,scope=builder
+            host.args.BASE_IMAGE=${{ env.IMAGE_HOST_BASE }}:sdk-${{ steps.sdk.outputs.version }}
+            host.cache-from=type=gha,scope=host
+            host.cache-from=type=registry,ref=${{ env.IMAGE_HOST }}:latest
+            host.cache-to=type=gha,mode=max,scope=host

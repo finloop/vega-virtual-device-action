@@ -1,0 +1,156 @@
+name: Build and publish Vega SDK base images
+
+# The ONLY workflow that talks to https://sdk-installer.vega.labcollab.net.
+# Publishes two heavyweight base images that every other workflow consumes via
+# `FROM ${BASE_IMAGE}` against GHCR (reliable) instead of re-running the flaky
+# installer:
+#   * vega-virtual-device-host-base — apt deps + Node + platform-tools + SDK + VVD
+#   * vega-sdk-builder              — slim SDK-only (no VVD) for build/lint/test
+#
+# Triggers are intentionally narrow so the installer URL is only hit when the
+# SDK version (or a base Dockerfile) actually changes. The weekly schedule keeps
+# the GHA + registry caches warm so they don't fall out of the 7-day LRU.
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+    paths:
+      - '.sdk-version'
+      - 'Dockerfile.host-base'
+      - 'Dockerfile.builder-base'
+      - 'docker-bake.hcl'
+      - '.github/workflows/docker-base-publish.yml'
+  pull_request:
+    branches:
+      - main
+    # On PR we still PUSH the new sdk-<X.Y.Z>-tagged base so the wrapper builds
+    # in the same PR (docker-publish.yml / vvd-action-test.yml / vega-app-build.yml)
+    # can resolve `FROM base:sdk-<X.Y.Z>`. A dangling tag from an abandoned PR
+    # is harmless; only the merge to main floats `:latest` onto it.
+    paths:
+      - '.sdk-version'
+      - 'Dockerfile.host-base'
+      - 'Dockerfile.builder-base'
+      - 'docker-bake.hcl'
+      - '.github/workflows/docker-base-publish.yml'
+  workflow_dispatch:
+  schedule:
+    # Weekly cache refresh — Sundays 04:00 UTC. Cache-hit no-op when nothing
+    # changed; the value is keeping GHA cache and the registry layers warm.
+    - cron: '0 4 * * 0'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_HOST_BASE: ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host-base
+  IMAGE_BUILDER_BASE: ghcr.io/${{ github.repository_owner }}/vega-sdk-builder
+
+jobs:
+  build:
+    name: Build and publish base images
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read SDK version
+        id: sdk
+        run: echo "version=$(cat .sdk-version)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Tag policy mirrors the wrapper publisher: branch / pr / semver / sdk-version /
+      # latest (latest only on default branch). On PR we still want the sdk-<X.Y.Z>
+      # tag pushed so wrapper builds can resolve the FROM reference.
+      - name: Metadata — host-base image
+        id: meta-host-base
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_HOST_BASE }}
+          bake-target: _meta-host-base
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=sdk-${{ steps.sdk.outputs.version }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Metadata — builder-base image
+        id: meta-builder-base
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BUILDER_BASE }}
+          bake-target: _meta-builder-base
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=sdk-${{ steps.sdk.outputs.version }}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # The Vega SDK installer sometimes transiently fails to download the VVM CLI
+      # binary (S3 returns a non-gzip XML error page instead of the tarball).
+      # The Dockerfiles already retry 3× internally; this job-level retry gives
+      # the server 3 more minutes to recover before we try the full build again.
+      # Cache scopes are dedicated to bases (separate from the wrapper publisher)
+      # so the bases' large layers never contend with the small wrapper layers.
+      - name: Build and push (base images)
+        id: build
+        uses: docker/bake-action@v6
+        continue-on-error: true
+        with:
+          targets: bases
+          files: |
+            ./docker-bake.hcl
+            cwd://${{ steps.meta-host-base.outputs.bake-file }}
+            cwd://${{ steps.meta-builder-base.outputs.bake-file }}
+          push: true
+          # GHA cache is the primary; registry `:latest` is a cold-start seed so
+          # a fresh runner / evicted GHA cache can still skip rebuilding layers
+          # that haven't changed since the last published `:latest`.
+          set: |
+            host-base.cache-from=type=gha,scope=base-host
+            host-base.cache-from=type=registry,ref=${{ env.IMAGE_HOST_BASE }}:latest
+            host-base.cache-to=type=gha,mode=max,scope=base-host
+            builder-base.cache-from=type=gha,scope=base-builder
+            builder-base.cache-from=type=registry,ref=${{ env.IMAGE_BUILDER_BASE }}:latest
+            builder-base.cache-to=type=gha,mode=max,scope=base-builder
+
+      - name: Wait for SDK server to recover
+        if: steps.build.outcome == 'failure'
+        run: |
+          echo "First build failed — waiting 3 minutes before retry (SDK installer server flakiness)..."
+          sleep 180
+
+      - name: Build and push (retry)
+        if: steps.build.outcome == 'failure'
+        uses: docker/bake-action@v6
+        with:
+          targets: bases
+          files: |
+            ./docker-bake.hcl
+            cwd://${{ steps.meta-host-base.outputs.bake-file }}
+            cwd://${{ steps.meta-builder-base.outputs.bake-file }}
+          push: true
+          set: |
+            host-base.cache-from=type=gha,scope=base-host
+            host-base.cache-from=type=registry,ref=${{ env.IMAGE_HOST_BASE }}:latest
+            host-base.cache-to=type=gha,mode=max,scope=base-host
+            builder-base.cache-from=type=gha,scope=base-builder
+            builder-base.cache-from=type=registry,ref=${{ env.IMAGE_BUILDER_BASE }}:latest
+            builder-base.cache-to=type=gha,mode=max,scope=base-builder
