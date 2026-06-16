@@ -1,0 +1,78 @@
+name: Test vega-virtual-device-action
+
+# Exercises vega-virtual-device-action end-to-end on a free GitHub-hosted runner:
+# builds the host image, enables KVM, boots the VVD via the action, captures the
+# "Kepler ready" home screen, and uploads it as an artifact.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'vega-virtual-device-action/**'
+      - 'scripts/**'
+      - 'Dockerfile'
+      - '.github/workflows/vvd-action-test.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'vega-virtual-device-action/**'
+      - 'scripts/**'
+      - 'Dockerfile'
+      - '.github/workflows/vvd-action-test.yml'
+  workflow_dispatch:
+
+jobs:
+  vvd-smoke:
+    name: Boot VVD and screenshot
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # Build the host image locally so the smoke test is self-contained and does
+      # not depend on the GHCR package already existing / being public.
+      - name: Build vega-virtual-device-host image
+        run: docker build --platform=linux/amd64 -t vega-virtual-device-host:ci -f Dockerfile .
+
+      - name: Boot VVD via the action
+        id: vvd
+        uses: ./vega-virtual-device-action
+        with:
+          image: vega-virtual-device-host:ci
+          pull: false
+          boot-timeout: 420
+          screenshot-path: artifacts/vvd-ready.png
+          script: |
+            set -x
+            vega exec vda devices
+            vega exec vda shell "id"
+
+      - name: Show outputs
+        if: always()
+        run: |
+          echo "boot-status=${{ steps.vvd.outputs.boot-status }}"
+          echo "screenshot=${{ steps.vvd.outputs.screenshot }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vvd-ready-screenshot
+          path: artifacts/
+          if-no-files-found: warn

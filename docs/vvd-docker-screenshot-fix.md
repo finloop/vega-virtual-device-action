@@ -1,6 +1,6 @@
 # Fixing VVD Screenshots in Docker (no GPU) — Full Walkthrough
 
-**Status:** ✅ Working · **Date:** 2026-06-15 · **Image:** `vegaos-full:sdk-0.22.5600`
+**Status:** ✅ Working · **Date:** 2026-06-15 · **Image:** `vega-virtual-device-host:sdk-0.22.5600`
 
 A non-black screenshot of the Vega Virtual Device, captured **inside Docker on a
 machine with no GPU** (pure CPU/llvmpipe software rendering):
@@ -36,7 +36,7 @@ The existing `start-vvd.sh` forced `hw.gpu.mode = swiftshader_indirect` and
 ```bash
 docker run -d --name vvd \
   --privileged --device /dev/kvm --init \
-  --entrypoint /bin/bash vegaos-full:sdk-0.22.5600 -c 'sleep infinity'
+  --entrypoint /bin/bash vega-virtual-device-host:sdk-0.22.5600 -c 'sleep infinity'
 ```
 
 - `--device /dev/kvm` — the emulator needs KVM.
@@ -49,7 +49,7 @@ docker run -d --name vvd \
 
 ## What the image needs
 
-Already present in `vegaos-full`, but make them explicit in the Dockerfile:
+Already present in `vega-virtual-device-host`, but make them explicit in the Dockerfile:
 
 - `libgl1-mesa-dri` → provides `swrast_dri.so` (llvmpipe). **This is the renderer.**
 - `xvfb`, `x11-utils` → virtual display + `xdpyinfo`.

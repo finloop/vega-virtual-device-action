@@ -1,0 +1,4 @@
+# Reference clones — external repos kept locally for reference, not part of this project
+/android-emulator-runner/
+/react-native-screens/
+/docker-android/

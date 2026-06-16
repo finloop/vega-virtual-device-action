@@ -1,0 +1,76 @@
+name: 'Vega Virtual Device Action'
+description: >-
+  Boots the Vega Virtual Device (VVD) — a QEMU-based emulator — inside the
+  vega-virtual-device-host container and runs a script against it, capturing a
+  screenshot. Analogous to reactivecircus/android-emulator-runner, but for Vega.
+author: 'vegaos-cicd'
+branding:
+  icon: 'tv'
+  color: 'orange'
+
+inputs:
+  script:
+    description: 'Command(s) to run inside the container once the VVD is booted and ready. Has vega, vda, vvd-screenshot.sh on PATH; cwd is the mounted checkout (or working-directory).'
+    required: true
+  image:
+    description: 'vega-virtual-device-host image reference to run.'
+    required: false
+    default: 'ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:sdk-0.22.5600'
+  boot-timeout:
+    description: 'Seconds to wait for the VVD to reach a ready (non-black) home screen before failing.'
+    required: false
+    default: '300'
+  working-directory:
+    description: 'Sub-directory of the checkout to cd into before running the script (and where screenshot-path is resolved).'
+    required: false
+    default: '.'
+  pre-launch-script:
+    description: 'Optional command(s) run inside the container BEFORE the VVD is started (e.g. extra setup or npm config).'
+    required: false
+    default: ''
+  capture-screenshot:
+    description: 'Capture a screenshot after the script runs (and on boot/run failure). true/false.'
+    required: false
+    default: 'true'
+  screenshot-path:
+    description: 'Where to write the screenshot, relative to working-directory.'
+    required: false
+    default: 'vvd-screenshot.png'
+  pull:
+    description: 'docker pull the image before running. true/false.'
+    required: false
+    default: 'true'
+  container-options:
+    description: 'Extra flags appended to the `docker run` command (advanced) — e.g. additional -v mounts or -e env.'
+    required: false
+    default: ''
+
+outputs:
+  screenshot:
+    description: 'Path (relative to working-directory) to the captured screenshot, or empty if none was produced.'
+    value: ${{ steps.run.outputs.screenshot }}
+  boot-status:
+    description: 'ready | timeout | failed.'
+    value: ${{ steps.run.outputs.boot-status }}
+
+runs:
+  using: composite
+  steps:
+    - name: Pull vega-virtual-device-host image
+      if: ${{ inputs.pull != 'false' }}
+      shell: bash
+      run: docker pull "${{ inputs.image }}"
+
+    - name: Boot VVD and run script
+      id: run
+      shell: bash
+      env:
+        VVD_IMAGE: ${{ inputs.image }}
+        VVD_SCRIPT: ${{ inputs.script }}
+        VVD_PRE_LAUNCH: ${{ inputs.pre-launch-script }}
+        VVD_BOOT_TIMEOUT: ${{ inputs.boot-timeout }}
+        VVD_WORKDIR: ${{ inputs.working-directory }}
+        VVD_CAPTURE: ${{ inputs.capture-screenshot }}
+        VVD_SHOT_PATH: ${{ inputs.screenshot-path }}
+        VVD_CONTAINER_OPTS: ${{ inputs.container-options }}
+      run: "${{ github.action_path }}/run.sh"

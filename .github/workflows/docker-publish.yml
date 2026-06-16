@@ -12,7 +12,9 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/vegaos
+  # Full image = QEMU device host (SDK + VVD + GL stack); build = SDK only, no emulator.
+  IMAGE_HOST: ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host
+  IMAGE_BUILDER: ghcr.io/${{ github.repository_owner }}/vega-sdk-builder
   # Pin the SDK version here. Update manually when a new SDK is released.
   VEGA_SDK_VERSION: "0.22.5600"
 
@@ -45,7 +47,7 @@ jobs:
         id: meta-full
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_BASE }}-full
+          images: ${{ env.IMAGE_HOST }}
           bake-target: _meta-full
           tags: |
             type=ref,event=branch
@@ -58,7 +60,7 @@ jobs:
         id: meta-build-only
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.IMAGE_BASE }}-build
+          images: ${{ env.IMAGE_BUILDER }}
           bake-target: _meta-build-only
           tags: |
             type=ref,event=branch
