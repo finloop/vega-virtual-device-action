@@ -1,4 +1,4 @@
-# vegaos-cicd
+# vega-virtual-device-action
 
 CI/CD building blocks for **Amazon Vega** (React Native for Fire TV) apps — Docker
 images with the Vega SDK baked in, and a GitHub Action that boots the **Vega
@@ -67,7 +67,7 @@ jobs:
 
       - name: Boot VVD and run tests
         id: vvd
-        uses: <owner>/vegaos-cicd/vega-virtual-device-action@main
+        uses: <owner>/vega-virtual-device-action/vega-virtual-device-action@main
         with:
           image: ghcr.io/<owner>/vega-virtual-device-host:sdk-0.22.5600
           screenshot-path: artifacts/home.png
