@@ -85,8 +85,18 @@ ENV SKIP_VVD_INSTALL=${SKIP_VVD_INSTALL}
 # the apt/node/platform-tools layers above it.
 ARG VEGA_SDK_VERSION=""
 COPY .sdk-version /tmp/.sdk-version
+# Retry: get_vvm.sh's CLI/SDK download is occasionally flaky (corrupt tarball), and
+# a version bump always re-runs this layer, so harden it against transient failures.
 RUN export VEGA_SDK_VERSION="${VEGA_SDK_VERSION:-$(cat /tmp/.sdk-version)}" \
- && curl -fsSL https://sdk-installer.vega.labcollab.net/get_vvm.sh | bash
+ && for n in 1 2 3; do \
+      echo "Installing Vega SDK (attempt $n/3)..." \
+      && curl -fsSL https://sdk-installer.vega.labcollab.net/get_vvm.sh -o /tmp/get_vvm.sh \
+      && bash /tmp/get_vvm.sh \
+      && exit 0; \
+      echo "Vega SDK install failed (attempt $n/3); retrying in $((n * 10))s..." >&2; \
+      sleep $((n * 10)); \
+    done; \
+    echo "Vega SDK install failed after 3 attempts" >&2; exit 1
 
 ENV PATH="/root/vega/bin:${PATH}"
 
