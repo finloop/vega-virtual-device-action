@@ -1,8 +1,9 @@
 name: Test vega-virtual-device-action
 
 # Exercises vega-virtual-device-action end-to-end on a free GitHub-hosted runner:
-# builds the host image, enables KVM, boots the VVD via the action, captures the
-# "Kepler ready" home screen, and uploads it as an artifact.
+# builds the host image ONCE, enables KVM, boots the VVD via the action, and in a
+# single boot runs both (a) the action's own checks + screenshot and (b) Argent's
+# Vega screenshot tool, uploading both screenshots.
 #
 # Runs on PRs only (plus manual dispatch): this is the sole place the host image
 # is built on a PR. On push to main / tags the host image is built and published
@@ -13,13 +14,24 @@ on:
     paths:
       - 'vega-virtual-device-action/**'
       - 'scripts/**'
+      - 'examples/argent-screenshot-test.sh'
       - 'Dockerfile'
       - '.github/workflows/vvd-action-test.yml'
   workflow_dispatch:
+    inputs:
+      argent-tarball:
+        description: 'Argent release tarball URL to test (blank = pinned default below)'
+        required: false
+        default: ''
+
+# Single workflow-level source of the Argent tarball URL: a dispatch input
+# overrides it; pull_request runs (no inputs) fall back to this default.
+env:
+  ARGENT_TARBALL: ${{ github.event.inputs.argent-tarball || 'https://github.com/finloop/argent/releases/download/v0.10.2-vega/swmansion-argent-0.10.2-vega.tgz' }}
 
 jobs:
   vvd-smoke:
-    name: Boot VVD and screenshot
+    name: Boot VVD, screenshot, Argent
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
@@ -68,7 +80,9 @@ jobs:
             type=gha,scope=host-ci
           cache-to: type=gha,mode=max,scope=host-ci
 
-      - name: Boot VVD via the action
+      # One build, one boot: the action's script runs the VVD checks and then the
+      # Argent Vega screenshot test; the action also captures its own screenshot.
+      - name: Boot VVD; run checks + Argent screenshot
         id: vvd
         uses: ./vega-virtual-device-action
         with:
@@ -76,10 +90,12 @@ jobs:
           pull: false
           boot-timeout: 420
           screenshot-path: artifacts/vvd-ready.png
+          container-options: -e ARGENT_TARBALL=${{ env.ARGENT_TARBALL }}
           script: |
-            set -x
+            set -ex
             vega exec vda devices
             vega exec vda shell "id"
+            bash examples/argent-screenshot-test.sh
 
       - name: Show outputs
         if: always()
@@ -90,6 +106,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: vvd-ready-screenshot
+          name: vvd-screenshots
           path: artifacts/
           if-no-files-found: warn
