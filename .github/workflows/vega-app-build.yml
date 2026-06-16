@@ -133,11 +133,16 @@ jobs:
           fi
 
           # 2. Upload the PNG (unique path per run, so no existing-blob SHA needed).
+          #    The base64 is ~1MB — too long for a CLI arg (128KB single-arg
+          #    limit), so build the JSON body in a file and pass it via --input.
           dest="screenshots/pr-${PR}/vega-app-${GITHUB_RUN_ID}.png"
-          gh api -X PUT "repos/$REPO/contents/$dest" \
-            -f message="CI: Vega sample app screenshot for PR #${PR} (${SHA})" \
-            -f branch="$SHOT_BRANCH" \
-            -f content="$(base64 -w0 "$SHOT")" >/dev/null
+          base64 -w0 "$SHOT" > "$RUNNER_TEMP/shot.b64"
+          jq -n \
+            --arg message "CI: Vega sample app screenshot for PR #${PR} (${SHA})" \
+            --arg branch "$SHOT_BRANCH" \
+            --rawfile content "$RUNNER_TEMP/shot.b64" \
+            '{message: $message, branch: $branch, content: $content}' > "$RUNNER_TEMP/put.json"
+          gh api -X PUT "repos/$REPO/contents/$dest" --input "$RUNNER_TEMP/put.json" >/dev/null
           url="https://github.com/$REPO/raw/$SHOT_BRANCH/$dest"
 
           # 3. Create or update the PR comment (dedup via the hidden marker).
