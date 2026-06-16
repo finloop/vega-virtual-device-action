@@ -38,15 +38,28 @@ echo "::endgroup::"
 
 echo "::group::Discover Vega device"
 # `argent run --json` prints an update banner before the JSON; slice from the
-# first '{' and decode just the JSON object.
-VEGA_SERIAL="$(argent run list-devices --json 2>/dev/null | python3 -c '
+# first '{' and decode just the JSON object. `vega device list` only enumerates
+# the device a short while after boot, so retry until the Vega entry appears.
+extract_vega_serial() {
+  python3 -c '
 import sys, json
 s = sys.stdin.read()
-obj = json.JSONDecoder().raw_decode(s[s.index("{"):])[0]
+try:
+    obj = json.JSONDecoder().raw_decode(s[s.index("{"):])[0]
+except ValueError:
+    sys.exit(0)
 print(next((d["serial"] for d in obj.get("devices", []) if d.get("platform") == "vega"), ""))
-')"
+'
+}
+VEGA_SERIAL=""
+for attempt in $(seq 1 12); do
+  VEGA_SERIAL="$(argent run list-devices --json 2>/dev/null | extract_vega_serial)"
+  [ -n "$VEGA_SERIAL" ] && break
+  echo "attempt ${attempt}: no Vega device yet; retrying..."
+  sleep 5
+done
 if [ -z "$VEGA_SERIAL" ]; then
-  echo "ERROR: no Vega device in argent list-devices"; exit 1
+  echo "ERROR: no Vega device in argent list-devices after retries"; exit 1
 fi
 echo "Vega serial: $VEGA_SERIAL"
 echo "::endgroup::"
@@ -55,14 +68,15 @@ echo "::group::Argent screenshot"
 SHOT="$OUT_DIR/argent-vega.png"
 # Use the Vega serial (amazon-…), NOT emulator-5554: the adb serial routes to
 # Argent's simulator-server backend, the Vega serial uses `adb emu screenrecord`.
-argent run screenshot --udid "$VEGA_SERIAL" --out "$SHOT" --json
-echo "::endgroup::"
-
-echo "::group::Verify non-black"
-python3 - "$SHOT" <<'PY'
+nonblack() {
+  python3 - "$1" <<'PY'
 import sys, zlib, struct
-d = open(sys.argv[1], "rb").read()
-assert d[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
+try:
+    d = open(sys.argv[1], "rb").read()
+except OSError:
+    sys.exit(1)
+if d[:8] != b"\x89PNG\r\n\x1a\n":
+    sys.exit(1)
 i, idat, w, h = 8, bytearray(), 0, 0
 while i + 8 <= len(d):
     ln = struct.unpack(">I", d[i:i + 4])[0]; t = d[i + 4:i + 8]
@@ -72,8 +86,20 @@ while i + 8 <= len(d):
     if t == b"IEND": break
 raw = zlib.decompress(bytes(idat))
 frac = (len(raw) - raw.count(0)) / len(raw)
-print(f"{w}x{h} nonblack_frac={frac:.4f}")
+sys.stderr.write(f"{w}x{h} nonblack_frac={frac:.4f}\n")
 sys.exit(0 if frac > 0.02 else 1)
 PY
+}
+captured=""
+for attempt in 1 2 3 4 5; do
+  rm -f "$SHOT"
+  argent run screenshot --udid "$VEGA_SERIAL" --out "$SHOT" --json >/dev/null 2>&1 || true
+  if nonblack "$SHOT"; then captured=1; break; fi
+  echo "attempt ${attempt}: screenshot missing/black; retrying..."
+  sleep 5
+done
+if [ -z "$captured" ]; then
+  echo "ERROR: no non-black Argent screenshot"; exit 1
+fi
 echo "OK: Argent Vega screenshot is non-black -> ${OUT_DIR}/argent-vega.png"
 echo "::endgroup::"
