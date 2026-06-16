@@ -1,0 +1,81 @@
+name: Build and publish Vega SDK Docker images
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_BASE: ghcr.io/${{ github.repository_owner }}/vegaos
+  # Pin the SDK version here. Update manually when a new SDK is released.
+  VEGA_SDK_VERSION: "0.22.5600"
+
+jobs:
+  build:
+    name: Build and publish
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Generate tags/labels for each image separately, writing bake file
+      # overrides that docker/bake-action merges with docker-bake.hcl.
+      - name: Metadata — full image
+        id: meta-full
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BASE }}-full
+          bake-target: _meta-full
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=sdk-${{ env.VEGA_SDK_VERSION }}
+
+      - name: Metadata — build-only image
+        id: meta-build-only
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_BASE }}-build
+          bake-target: _meta-build-only
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=sdk-${{ env.VEGA_SDK_VERSION }}
+
+      - name: Build and push
+        uses: docker/bake-action@v4
+        with:
+          files: |
+            ./docker-bake.hcl
+            ${{ steps.meta-full.outputs.bake-file }}
+            ${{ steps.meta-build-only.outputs.bake-file }}
+          push: ${{ github.event_name != 'pull_request' }}
+          set: |
+            *.args.VEGA_SDK_VERSION=${{ env.VEGA_SDK_VERSION }}
+            *.cache-from=type=gha
+            *.cache-to=type=gha,mode=max
