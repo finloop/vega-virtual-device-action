@@ -4,22 +4,23 @@ SHELL ["/bin/bash", "-c"]
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install curl and utilities needed by the SDK installer, plus Node.js.
+# Install curl and utilities needed by the SDK installer.
 # Graphics stack for non-black screen capture WITHOUT a GPU (see
 # docs/vvd-docker-screenshot-fix.md):
 #   - libgl1-mesa-dri provides swrast_dri.so = the llvmpipe software GL renderer
 #     that backs the emulator's `-gpu host` path. THIS is what makes capture work.
 #   - xvfb + x11-utils give -gpu host a virtual display + xdpyinfo.
 #   - libgl1/libegl1 + x11/xcb libs are the GL/X loaders.
-#   - python3 drives the emulator-console screenshot (scripts/vvd-screenshot.sh).
+#   - python3 drives the emulator-console screenshot (scripts/vvd-screenshot.sh)
+#     and unpacks the platform-tools zip below.
+# Node.js is NOT installed from apt (Ubuntu 22.04 ships Node 12, too old for the
+# Vega CLI tooling and for Argent which needs Node 18+); Node 20 is installed below.
 RUN apt-get update && \
     apt-get install -y \
       curl \
       tar \
       jq \
       ca-certificates \
-      nodejs \
-      npm \
       python3 \
       libx11-6 \
       libxext6 \
@@ -35,6 +36,30 @@ RUN apt-get update && \
       iproute2 \
       --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
+
+# Node.js 20 (LTS) — the Vega CLI runs fine under it and Argent (run against the
+# VVD in CI) needs Node 18+. Installed to /opt/node and put first on PATH so the
+# SDK install + verify steps below use it.
+ARG NODE_VERSION=v20.18.1
+RUN curl -fsSL "https://nodejs.org/dist/${NODE_VERSION}/node-${NODE_VERSION}-linux-x64.tar.gz" \
+      -o /tmp/node.tar.gz && \
+    mkdir -p /opt/node && \
+    tar -xzf /tmp/node.tar.gz -C /opt/node --strip-components=1 && \
+    rm /tmp/node.tar.gz
+ENV PATH="/opt/node/bin:${PATH}"
+
+# Android platform-tools (adb). Argent's Vega screenshot resolves a real `adb`
+# from $ANDROID_HOME/platform-tools and captures via `adb emu screenrecord`;
+# real adb auto-detects the VVD on tcp:5555 as emulator-5554.
+ENV ANDROID_HOME=/opt/android
+ENV ANDROID_SDK_ROOT=/opt/android
+RUN curl -fsSL https://dl.google.com/android/repository/platform-tools-latest-linux.zip \
+      -o /tmp/platform-tools.zip && \
+    mkdir -p "${ANDROID_HOME}" && \
+    python3 -c "import zipfile; zipfile.ZipFile('/tmp/platform-tools.zip').extractall('${ANDROID_HOME}')" && \
+    chmod +x "${ANDROID_HOME}/platform-tools/adb" && \
+    rm /tmp/platform-tools.zip
+ENV PATH="${ANDROID_HOME}/platform-tools:${PATH}"
 
 # Install Vega SDK including VVD (Vega Virtual Device / emulator)
 # NOTE: Run this image with:  --privileged --device /dev/kvm --init
@@ -58,7 +83,7 @@ RUN curl -fsSL https://sdk-installer.vega.labcollab.net/get_vvm.sh | bash
 ENV PATH="/root/vega/bin:${PATH}"
 
 # Verify toolchain
-RUN vega -v && node -v && npm -v
+RUN vega -v && node -v && npm -v && adb version
 
 # Private npm registry config is mounted at runtime via NPM_CONFIG_GLOBALCONFIG.
 # All @amazon-devices/ packages are currently public so this is a no-op by default.
