@@ -85,8 +85,16 @@ RUN curl -fsSL https://sdk-installer.vega.labcollab.net/get_vvm.sh | bash
 
 ENV PATH="/root/vega/bin:${PATH}"
 
-# Verify toolchain
-RUN vega -v && node -v && npm -v && adb version
+# Verify toolchain. Also assert the installed SDK matches VEGA_SDK_VERSION —
+# get_vvm.sh is fetched live and is not pinned in this repo, so without this
+# the image could ship with a different SDK than its `sdk-<version>` tag.
+# `vega -v` prints two lines; the SDK version is the one labelled "Active SDK
+# Version:". Match the whole line so we don't accidentally match the CLI version.
+RUN vega -v && node -v && npm -v && adb version && \
+    if ! vega -v 2>&1 | grep -qFx "Active SDK Version: $VEGA_SDK_VERSION"; then \
+      echo "SDK version mismatch: wanted $VEGA_SDK_VERSION, got: $(vega -v 2>&1)" >&2; \
+      exit 1; \
+    fi
 
 # Private npm registry config is mounted at runtime via NPM_CONFIG_GLOBALCONFIG.
 # All @amazon-devices/ packages are currently public so this is a no-op by default.

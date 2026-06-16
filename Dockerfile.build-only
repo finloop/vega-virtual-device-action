@@ -28,7 +28,12 @@ RUN curl -fsSL https://sdk-installer.vega.labcollab.net/get_vvm.sh | bash
 
 ENV PATH="/root/vega/bin:${PATH}"
 
-RUN vega -v && node -v && npm -v
+# See Dockerfile for the rationale on the SDK version assertion.
+RUN vega -v && node -v && npm -v && \
+    if ! vega -v 2>&1 | grep -qFx "Active SDK Version: $VEGA_SDK_VERSION"; then \
+      echo "SDK version mismatch: wanted $VEGA_SDK_VERSION, got: $(vega -v 2>&1)" >&2; \
+      exit 1; \
+    fi
 
 ENV NPM_CONFIG_GLOBALCONFIG="/etc/npmrc"
 
