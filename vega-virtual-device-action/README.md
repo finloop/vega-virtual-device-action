@@ -40,7 +40,7 @@ jobs:
         id: vvd
         uses: <owner>/vegaos-cicd/vega-virtual-device-action@main
         with:
-          image: ghcr.io/<owner>/vega-virtual-device-host:sdk-0.22.5600
+          image: ghcr.io/<owner>/vega-virtual-device-host:latest
           boot-timeout: 300
           screenshot-path: artifacts/home.png
           script: |
@@ -60,7 +60,7 @@ jobs:
 | Input | Default | Description |
 |---|---|---|
 | `script` | _(required)_ | Command(s) run inside the container once the VVD is ready. `vega`, `vda`, `vvd-screenshot.sh` are on `PATH`; cwd is the checkout (or `working-directory`). |
-| `image` | `ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:sdk-0.22.5600` | The `vega-virtual-device-host` image to run. |
+| `image` | `ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:latest` | The `vega-virtual-device-host` image to run. Pin to `:sdk-<version>` for a reproducible SDK. |
 | `boot-timeout` | `300` | Seconds to wait for a ready (non-black) home screen before failing. |
 | `working-directory` | `.` | Sub-directory of the checkout to `cd` into for the script (and where `screenshot-path` is resolved). |
 | `pre-launch-script` | `''` | Optional command(s) run inside the container **before** the VVD starts. |
@@ -131,3 +131,22 @@ requires.
   that download plus a cold llvmpipe boot. `300` s is a safe default.
 - **Artifacts** land under the bind-mounted checkout, so a normal
   `actions/upload-artifact` step on the runner picks them up.
+
+## Maintaining the SDK version
+
+The Vega SDK version is centralized in a single file at the repo root,
+**`.sdk-version`**. The Dockerfiles read it at build time and the publisher uses it
+for the `:sdk-<version>` image tag — nothing else hardcodes it (a CI check enforces
+this). To bump it:
+
+```bash
+tools/bump-sdk-version.sh            # write the latest (isLatest) SDK
+tools/bump-sdk-version.sh 0.22.9999  # or pin an explicit version
+```
+
+Then open a PR. Merging to `main` publishes `:latest` and `:sdk-<new>`; to also
+publish versioned images, push a release tag:
+
+```bash
+git tag v0.0.2 && git push origin v0.0.2
+```

@@ -1,6 +1,5 @@
-variable "VEGA_SDK_VERSION" {
-  default = "0.22.5600"
-}
+# The SDK version is centralized in .sdk-version and read by the Dockerfiles at
+# build time — it is intentionally NOT defined here.
 
 # Full image = the QEMU device host (SDK + VVD emulator + software-GL stack).
 variable "IMAGE_HOST" {
@@ -26,7 +25,6 @@ target "full" {
   dockerfile = "Dockerfile"
   platforms  = ["linux/amd64"]
   args = {
-    VEGA_SDK_VERSION = VEGA_SDK_VERSION
     SKIP_VVD_INSTALL = "false"
   }
   # Tags come from docker/metadata-action via the inherited _meta-full target in CI.
@@ -40,8 +38,5 @@ target "build-only" {
   inherits   = ["_meta-build-only"]
   dockerfile = "Dockerfile.build-only"
   platforms  = ["linux/amd64"]
-  args = {
-    VEGA_SDK_VERSION = VEGA_SDK_VERSION
-  }
   # See note on the `full` target: tags are inherited from _meta-build-only in CI.
 }

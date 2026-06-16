@@ -15,7 +15,7 @@ inputs:
   image:
     description: 'vega-virtual-device-host image reference to run.'
     required: false
-    default: 'ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:sdk-0.22.5600'
+    default: 'ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:latest'
   boot-timeout:
     description: 'Seconds to wait for the VVD to reach a ready (non-black) home screen before failing.'
     required: false
