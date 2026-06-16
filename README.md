@@ -31,13 +31,13 @@ It is the Vega analogue of
 ## Images
 
 Both images are published to GHCR by [`docker-publish.yml`](.github/workflows/docker-publish.yml)
-on push to `main` and on `v*` tags. They are pinned to a Vega SDK version
-(currently **`0.22.5600`**).
+on push to `main` and on `v*` tags. The SDK version is centralized in
+[`.sdk-version`](.sdk-version) — see [Maintaining the SDK version](vega-virtual-device-action/README.md#maintaining-the-sdk-version).
 
-| Image | Tag example | Contains | Use for |
+| Image | Tags | Contains | Use for |
 |---|---|---|---|
-| `ghcr.io/<owner>/vega-virtual-device-host` | `sdk-0.22.5600`, `latest` | Vega SDK, VVD emulator, Node 20, adb, Mesa llvmpipe + Xvfb | Booting a device — UI tests, screenshots, Argent runs |
-| `ghcr.io/<owner>/vega-sdk-builder` | `sdk-0.22.5600`, `latest` | Vega SDK, Node, npm | Build / lint / unit tests (no device) |
+| `ghcr.io/<owner>/vega-virtual-device-host` | `latest`, `sdk-<version>` | Vega SDK, VVD emulator, Node 20, adb, Mesa llvmpipe + Xvfb | Booting a device — UI tests, screenshots, Argent runs |
+| `ghcr.io/<owner>/vega-sdk-builder` | `latest`, `sdk-<version>` | Vega SDK, Node, npm | Build / lint / unit tests (no device) |
 
 > **Note:** GHCR packages default to **private**. Consumers either make the
 > package public or add `permissions: packages: read` + a `docker/login-action`
@@ -69,7 +69,7 @@ jobs:
         id: vvd
         uses: <owner>/vega-virtual-device-action/vega-virtual-device-action@main
         with:
-          image: ghcr.io/<owner>/vega-virtual-device-host:sdk-0.22.5600
+          image: ghcr.io/<owner>/vega-virtual-device-host:latest
           screenshot-path: artifacts/home.png
           script: |
             # device is live here; vega / vda / vvd-screenshot.sh are on PATH
