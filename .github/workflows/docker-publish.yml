@@ -81,6 +81,11 @@ jobs:
       - name: Build and push
         uses: docker/bake-action@v6
         with:
+          # On PRs, build ONLY the build-only image here. The host/full image is
+          # built and smoke-tested by vvd-action-test.yml on PRs, so building it
+          # here too would be a redundant second build of the same image. On
+          # push/tag this publisher is the sole builder and builds both (default).
+          targets: ${{ github.event_name == 'pull_request' && 'build-only' || 'default' }}
           files: |
             ./docker-bake.hcl
             cwd://${{ steps.meta-full.outputs.bake-file }}

@@ -3,15 +3,11 @@ name: Test vega-virtual-device-action
 # Exercises vega-virtual-device-action end-to-end on a free GitHub-hosted runner:
 # builds the host image, enables KVM, boots the VVD via the action, captures the
 # "Kepler ready" home screen, and uploads it as an artifact.
-
+#
+# Runs on PRs only (plus manual dispatch): this is the sole place the host image
+# is built on a PR. On push to main / tags the host image is built and published
+# by docker-publish.yml, so re-building it here would just duplicate that work.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'vega-virtual-device-action/**'
-      - 'scripts/**'
-      - 'Dockerfile'
-      - '.github/workflows/vvd-action-test.yml'
   pull_request:
     branches: [main]
     paths:
