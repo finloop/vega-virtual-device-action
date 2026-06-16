@@ -74,8 +74,8 @@ jobs:
         with:
           files: |
             ./docker-bake.hcl
-            ${{ steps.meta-full.outputs.bake-file }}
-            ${{ steps.meta-build-only.outputs.bake-file }}
+            cwd://${{ steps.meta-full.outputs.bake-file }}
+            cwd://${{ steps.meta-build-only.outputs.bake-file }}
           push: ${{ github.event_name != 'pull_request' }}
           set: |
             *.args.VEGA_SDK_VERSION=${{ env.VEGA_SDK_VERSION }}
