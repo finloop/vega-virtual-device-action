@@ -1,0 +1,120 @@
+name: Build sample Vega app
+
+# Builds and runs the sample Vega app end-to-end on a free GitHub-hosted runner:
+# builds the host image, enables KVM, boots the VVD via vega-virtual-device-action,
+# and in that single boot scaffolds an app from the hello-world template, builds the
+# RELEASE vpkg, installs + launches it on the VVD, and screenshots the running app.
+#
+# Runs on PRs only (plus manual dispatch): like vvd-action-test.yml this builds the
+# host image locally so it is self-contained. On push to main / tags the image is
+# built and published by docker-publish.yml.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'vega-virtual-device-action/**'
+      - 'scripts/**'
+      - 'examples/build-sample-vega-app.sh'
+      - 'Dockerfile'
+      - '.github/workflows/vega-app-build.yml'
+  workflow_dispatch:
+    inputs:
+      template:
+        description: 'Vega app template to scaffold from (see `vega project list-templates`)'
+        required: false
+        default: 'helloWorld'
+
+jobs:
+  build-sample-app:
+    name: Scaffold, build release, run, screenshot
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    # contents: write — the screenshot-comment action commits the PNG to its
+    #   own branch (webpage-screenshot-action-branch).
+    # pull-requests: write — to post the screenshot comment on the PR.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build the host image locally (self-contained, like vvd-action-test.yml).
+      # type=gha layer cache reuses the expensive apt + Vega SDK layers from the
+      # publisher's scope=host and this workflow's own scope=host-ci.
+      - name: Build vega-virtual-device-host image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: vega-virtual-device-host:ci
+          cache-from: |
+            type=gha,scope=host
+            type=gha,scope=host-ci
+          cache-to: type=gha,mode=max,scope=host-ci
+
+      # One build, one boot: scaffold from the template, build the RELEASE vpkg,
+      # install + launch on the VVD; the action captures the screenshot afterwards.
+      - name: Boot VVD; build + run sample app; screenshot
+        id: vvd
+        uses: ./vega-virtual-device-action
+        with:
+          image: vega-virtual-device-host:ci
+          pull: false
+          boot-timeout: 420
+          screenshot-path: artifacts/vega-app.png
+          container-options: -e TEMPLATE=${{ github.event.inputs.template || 'helloWorld' }}
+          script: |
+            set -ex
+            bash examples/build-sample-vega-app.sh
+
+      - name: Show outputs
+        if: always()
+        run: |
+          echo "boot-status=${{ steps.vvd.outputs.boot-status }}"
+          echo "screenshot=${{ steps.vvd.outputs.screenshot }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vega-app-screenshot
+          path: artifacts/
+          if-no-files-found: warn
+
+      # Post the screenshot as a PR comment. github_branch mode commits the PNG
+      # to webpage-screenshot-action-branch and embeds it via a github.com/.../raw
+      # URL, which renders inline for authorized viewers of THIS private repo
+      # (raw.githubusercontent.com would not — GitHub's image proxy can't auth to
+      # private content). Pinned to the 0.0.5 commit since it runs with a
+      # write-scoped token. continue-on-error so a commenting hiccup (e.g. a
+      # fork PR's read-only token) can't fail the build/run check itself.
+      # Skipped on workflow_dispatch — the action only supports pull_request.
+      - name: Comment PR with screenshot
+        if: always() && github.event_name == 'pull_request' && steps.vvd.outputs.screenshot != ''
+        continue-on-error: true
+        uses: opengisch/comment-pr-with-images@501ce2dabd4744c4ccfad563f6af7b33d5a0779a # 0.0.5
+        with:
+          images: artifacts/vega-app.png
+          upload_to: github_branch
+          custom_attachment_msg: 'Vega sample app — built from the helloWorld template and run on the VVD'
