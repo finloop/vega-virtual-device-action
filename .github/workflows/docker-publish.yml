@@ -43,8 +43,12 @@ jobs:
         id: sdk
         run: echo "version=$(cat .sdk-version)" >> "$GITHUB_OUTPUT"
 
+      # Log in on every event. push/tag publishes the images AND writes the
+      # registry build cache; PRs need read access to RESTORE that cache below
+      # (cache-from). On a fork PR the read-only token may not see a private
+      # cache — buildx then just treats it as a miss and rebuilds, so login
+      # staying enabled here is harmless.
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -104,14 +108,19 @@ jobs:
             cwd://${{ steps.meta-full.outputs.bake-file }}
             cwd://${{ steps.meta-build-only.outputs.bake-file }}
           push: ${{ github.event_name != 'pull_request' }}
-          # Per-target cache scopes (not a shared `*` scope) so the two images
-          # don't overwrite each other's GHA cache manifest, and so the host
-          # image's layers are shareable with vvd-action-test.yml (scope=host).
+          # Persistent registry build cache (GHCR), one ref per image. Unlike
+          # type=gha (10GB repo cap + LRU eviction + branch-scoped), a registry
+          # cache is never evicted and is readable from every branch/PR, so the
+          # expensive Vega SDK layer (get_vvm.sh) is restored from cache on
+          # virtually every build instead of being re-downloaded from the flaky
+          # installer. cache-to runs only on push/tag — PRs lack registry write
+          # auth and must not clobber the shared cache; cache-from is read by
+          # everyone, including vvd-action-test.yml / vega-app-build.yml.
           set: |
-            full.cache-from=type=gha,scope=host
-            full.cache-to=type=gha,mode=max,scope=host
-            build-only.cache-from=type=gha,scope=builder
-            build-only.cache-to=type=gha,mode=max,scope=builder
+            full.cache-from=type=registry,ref=${{ env.IMAGE_HOST }}:buildcache
+            build-only.cache-from=type=registry,ref=${{ env.IMAGE_BUILDER }}:buildcache
+            ${{ github.event_name != 'pull_request' && format('full.cache-to=type=registry,ref={0}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true', env.IMAGE_HOST) || '' }}
+            ${{ github.event_name != 'pull_request' && format('build-only.cache-to=type=registry,ref={0}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true', env.IMAGE_BUILDER) || '' }}
 
       - name: Wait for SDK server to recover
         if: steps.build.outcome == 'failure'
@@ -130,7 +139,7 @@ jobs:
             cwd://${{ steps.meta-build-only.outputs.bake-file }}
           push: ${{ github.event_name != 'pull_request' }}
           set: |
-            full.cache-from=type=gha,scope=host
-            full.cache-to=type=gha,mode=max,scope=host
-            build-only.cache-from=type=gha,scope=builder
-            build-only.cache-to=type=gha,mode=max,scope=builder
+            full.cache-from=type=registry,ref=${{ env.IMAGE_HOST }}:buildcache
+            build-only.cache-from=type=registry,ref=${{ env.IMAGE_BUILDER }}:buildcache
+            ${{ github.event_name != 'pull_request' && format('full.cache-to=type=registry,ref={0}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true', env.IMAGE_HOST) || '' }}
+            ${{ github.event_name != 'pull_request' && format('build-only.cache-to=type=registry,ref={0}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true', env.IMAGE_BUILDER) || '' }}
