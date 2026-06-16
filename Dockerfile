@@ -88,6 +88,7 @@ COPY .sdk-version /tmp/.sdk-version
 # Retry: get_vvm.sh's CLI/SDK download is occasionally flaky (corrupt tarball), and
 # a version bump always re-runs this layer, so harden it against transient failures.
 RUN export VEGA_SDK_VERSION="${VEGA_SDK_VERSION:-$(cat /tmp/.sdk-version)}" \
+ && printf 'export VEGA_SDK_VERSION=%q\n' "$VEGA_SDK_VERSION" > /etc/vega-sdk-env \
  && for n in 1 2 3; do \
       echo "Installing Vega SDK (attempt $n/3)..." \
       && curl -fsSL https://sdk-installer.vega.labcollab.net/get_vvm.sh -o /tmp/get_vvm.sh \
@@ -98,6 +99,7 @@ RUN export VEGA_SDK_VERSION="${VEGA_SDK_VERSION:-$(cat /tmp/.sdk-version)}" \
     done; \
     echo "Vega SDK install failed after 3 attempts" >&2; exit 1
 
+ENV BASH_ENV=/etc/vega-sdk-env
 ENV PATH="/root/vega/bin:${PATH}"
 
 # Verify toolchain. Also assert the installed SDK matches VEGA_SDK_VERSION —
