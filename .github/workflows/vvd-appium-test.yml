@@ -1,0 +1,253 @@
+name: VVD Appium navigation screenshots
+
+# Boots the VVD via vega-virtual-device-action on a free GitHub-hosted runner and
+# navigates the pre-installed Kepler Video App with **Appium** (WebdriverIO + the
+# Vega "kepler" driver) — browse → carousels → details → player → settings —
+# screenshotting each step with Appium's own takeScreenshot(). It exercises the
+# official Appium-on-Vega path end-to-end (install Appium + kepler driver, start
+# the server, create a session, inject D-pad keys) on the headless software-GL
+# (Mesa llvmpipe) VVD.
+#
+# Like vvd-action-test.yml this builds the host image here (PR-only) with the same
+# layer cache; on push to main / tags docker-publish.yml builds and publishes it.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'vega-virtual-device-action/**'
+      - 'scripts/**'
+      - 'examples/appium-navigation-test.sh'
+      - 'examples/appium/**'
+      - 'Dockerfile'
+      - '.sdk-version'
+      - '.github/workflows/vvd-appium-test.yml'
+  workflow_dispatch:
+    inputs:
+      appium-version:
+        description: 'Appium server version (blank = pinned default)'
+        required: false
+        default: ''
+      kepler-driver-version:
+        description: 'Vega kepler Appium driver version (blank = pinned default)'
+        required: false
+        default: ''
+      screenshot-policy:
+        description: 'warn (black screenshots reported) or require (black fails the job)'
+        required: false
+        default: 'warn'
+
+# Workflow-level sources: a dispatch input overrides each; pull_request runs (no
+# inputs) fall back to the pinned defaults. Versions per the Appium-for-Vega docs.
+env:
+  APPIUM_VERSION: ${{ github.event.inputs.appium-version || '2.2.2' }}
+  KEPLER_DRIVER_VERSION: ${{ github.event.inputs.kepler-driver-version || '3.30.0' }}
+  SCREENSHOT_POLICY: ${{ github.event.inputs.screenshot-policy || 'warn' }}
+  # A stock VVD has no pre-installed user apps, so CI installs the Kepler Video App
+  # from a prebuilt vpkg hosted as a release asset on this repo (same fixture as
+  # the Argent navigation test). Re-upload to that release to bump.
+  KEPLERVIDEOAPP_RELEASE: fixtures-keplervideoapp-0.22.1
+  KEPLERVIDEOAPP_VPKG: keplervideoapp_aarch64.vpkg
+  APP_ID: com.amazondeveloper.keplervideoapp.main
+
+jobs:
+  vvd-appium:
+    name: Boot VVD, navigate app with Appium, screenshot each step
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    # contents: write — the screenshot-comment step commits the PNGs to a dedicated
+    #   ci-screenshots branch (so they can be embedded inline).
+    # pull-requests: write — to post/update the screenshot comment on the PR.
+    # packages: read — to RESTORE the registry build cache written by docker-publish.yml.
+    permissions:
+      contents: write
+      pull-requests: write
+      packages: read
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Read access to the GHCR registry build cache restored in the build below.
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build the host image locally so the test exercises THIS PR's Dockerfile /
+      # scripts. Two-tier cache (same as vvd-action-test.yml): the registry
+      # buildcache (written by docker-publish.yml) serves the expensive apt + Vega
+      # SDK layers; gha scope=host-ci is supplementary per-PR warmth.
+      - name: Build vega-virtual-device-host image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: vega-virtual-device-host:ci
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:buildcache
+            type=gha,scope=host-ci
+          cache-to: type=gha,mode=min,scope=host-ci
+
+      # Fetch the prebuilt app vpkg onto the runner (gh is available here, not in
+      # the action container). It lands under the checkout, which the action mounts
+      # at /workspace, so the script installs it via $VPKG.
+      - name: Download Kepler Video App vpkg (test fixture)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p fixtures
+          gh release download "$KEPLERVIDEOAPP_RELEASE" \
+            -R "${{ github.repository }}" \
+            -p "$KEPLERVIDEOAPP_VPKG" \
+            -D fixtures --clobber
+          ls -lh fixtures/
+
+      # One build, one boot: the action boots the VVD, then the script installs the
+      # Kepler Video App, starts Appium and navigates it with WebdriverIO,
+      # screenshotting each step. It exits non-zero if Appium can't drive the app
+      # (and, when SCREENSHOT_POLICY=require, if a required screen is black).
+      - name: Boot VVD; navigate Kepler Video App with Appium; screenshot each step
+        id: vvd
+        uses: ./vega-virtual-device-action
+        with:
+          image: vega-virtual-device-host:ci
+          pull: false
+          boot-timeout: 420
+          screenshot-path: artifacts/appium-final.png
+          container-options: >-
+            -e VPKG=fixtures/${{ env.KEPLERVIDEOAPP_VPKG }}
+            -e APP_ID=${{ env.APP_ID }}
+            -e APPIUM_VERSION=${{ env.APPIUM_VERSION }}
+            -e KEPLER_DRIVER_VERSION=${{ env.KEPLER_DRIVER_VERSION }}
+            -e SCREENSHOT_POLICY=${{ env.SCREENSHOT_POLICY }}
+          script: |
+            set -ex
+            bash examples/appium-navigation-test.sh
+
+      - name: Show outputs
+        if: always()
+        run: |
+          echo "boot-status=${{ steps.vvd.outputs.boot-status }}"
+          echo "screenshot=${{ steps.vvd.outputs.screenshot }}"
+
+      # The script writes its Markdown table to artifacts/summary.md ($GITHUB_STEP_SUMMARY
+      # is not visible inside the action's container), so surface it in the job summary here.
+      - name: Publish navigation summary
+        if: always()
+        run: |
+          if [ -f artifacts/summary.md ]; then
+            cat artifacts/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No navigation summary produced (the script may have failed before reporting)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vvd-appium-screenshots
+          path: artifacts/
+          if-no-files-found: warn
+
+      # Post every navigation screenshot as a single inline PR comment so the run
+      # can be reviewed without downloading the artifact. Same mechanism as
+      # vvd-navigation-test.yml / vega-app-build.yml: host the PNGs on a dedicated
+      # `ci-screenshots` branch via the Contents API and embed them with
+      # github.com/.../raw/<branch>/<path> URLs (which render inline for authorized
+      # viewers of a private repo). The comment is updated in place on re-runs via a
+      # hidden marker, and runs even on failure so black/missing frames are visible.
+      - name: Comment PR with Appium navigation screenshots
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.base_ref }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          BOOT_STATUS: ${{ steps.vvd.outputs.boot-status }}
+          SHOT_BRANCH: ci-screenshots
+        run: |
+          set -euo pipefail
+          MARKER='<!-- vvd-appium-screenshots -->'
+
+          shopt -s nullglob
+          shots=(artifacts/[0-9][0-9]-*.png)
+          if [ ${#shots[@]} -eq 0 ]; then
+            echo "No navigation screenshots found; skipping comment."
+            exit 0
+          fi
+
+          # 1. Ensure the screenshots branch exists (created from the PR base).
+          if ! gh api "repos/$REPO/branches/$SHOT_BRANCH" >/dev/null 2>&1; then
+            base_sha=$(gh api "repos/$REPO/git/refs/heads/$BASE_REF" --jq '.object.sha')
+            gh api "repos/$REPO/git/refs" -f ref="refs/heads/$SHOT_BRANCH" -f sha="$base_sha" >/dev/null
+          fi
+
+          # 2. Upload each PNG (unique path per run, so no existing-blob SHA needed)
+          #    and build a 2-column HTML image grid. The base64 can exceed the 128KB
+          #    single-arg limit, so pass each PUT body via a file with --input.
+          grid="<table>"
+          n=0
+          for shot in "${shots[@]}"; do
+            name=$(basename "$shot" .png)
+            dest="screenshots/pr-${PR}/appium-${GITHUB_RUN_ID}/${name}.png"
+            base64 -w0 "$shot" > "$RUNNER_TEMP/shot.b64"
+            jq -n \
+              --arg message "CI: VVD Appium navigation ${name} for PR #${PR} (${SHA})" \
+              --arg branch "$SHOT_BRANCH" \
+              --rawfile content "$RUNNER_TEMP/shot.b64" \
+              '{message: $message, branch: $branch, content: $content}' > "$RUNNER_TEMP/put.json"
+            gh api -X PUT "repos/$REPO/contents/$dest" --input "$RUNNER_TEMP/put.json" >/dev/null
+            url="https://github.com/$REPO/raw/$SHOT_BRANCH/$dest"
+            if [ $((n % 2)) -eq 0 ]; then grid="${grid}<tr>"; fi
+            grid="${grid}<td align=\"center\" width=\"50%\"><sub><code>${name}</code></sub><br><img width=\"380\" src=\"${url}\"></td>"
+            n=$((n + 1))
+            if [ $((n % 2)) -eq 0 ]; then grid="${grid}</tr>"; fi
+          done
+          if [ $((n % 2)) -ne 0 ]; then grid="${grid}</tr>"; fi
+          grid="${grid}</table>"
+
+          # 3. Assemble the comment body (summary table appended if present).
+          summary=""
+          if [ -f artifacts/summary.md ]; then summary="$(cat artifacts/summary.md)"; fi
+          body="${MARKER}
+          ### VVD Appium navigation screenshots
+
+          Pre-installed Kepler Video App navigated on the VVD with Appium (WebdriverIO + kepler driver) at commit \`${SHA}\`. Boot status: \`${BOOT_STATUS}\`. Screenshots captured via Appium's \`takeScreenshot()\` under software GL (llvmpipe).
+
+          ${grid}
+
+          ${summary}"
+
+          # 4. Create or update the PR comment (dedup via the hidden marker).
+          cid=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                  --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | head -n1 || true)
+          if [ -n "$cid" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$cid" -f body="$body" >/dev/null
+            echo "Updated comment $cid"
+          else
+            gh api "repos/$REPO/issues/$PR/comments" -f body="$body" >/dev/null
+            echo "Created comment"
+          fi
