@@ -35,6 +35,11 @@ jobs:
     name: Boot VVD, screenshot, Argent
     runs-on: ubuntu-22.04
     timeout-minutes: 60
+    # packages: read — to RESTORE the registry build cache written by
+    # docker-publish.yml (the expensive Vega SDK layer); see the build step.
+    permissions:
+      contents: read
+      packages: read
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -58,16 +63,24 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Build the host image locally so the smoke test is self-contained and does
-      # not depend on the GHCR package already existing / being public.
+      # Read access to the GHCR registry build cache restored in the build below.
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build the host image locally so the smoke test exercises THIS PR's
+      # Dockerfile/scripts changes (it can't just pull the published image).
       #
-      # Layer cache (type=gha) means the expensive layers — apt install + the
-      # Vega SDK download (get_vvm.sh) — are NOT rebuilt every run:
-      #   - cache-from scope=host  reuses the layers docker-publish.yml already
-      #     built and pushed to the GHA cache (same Dockerfile/SDK version).
-      #   - cache-from/to scope=host-ci keeps this workflow's own cache warm so
-      #     repeated pushes on the same branch only rebuild changed layers
-      #     (e.g. a scripts/ change), without contending with the publisher's writer.
+      # The expensive layers — apt install + the Vega SDK download (get_vvm.sh) —
+      # are restored from the persistent registry cache that docker-publish.yml
+      # writes on push to main. Unlike type=gha (10GB cap + LRU eviction +
+      # branch-scoped), a registry cache is never evicted and is readable from
+      # any PR, so a PR that doesn't touch apt/node/.sdk-version never re-runs the
+      # flaky installer. Read-only: PRs must not write the shared cache (only the
+      # cheap top layers — COPY scripts, verify — would differ here anyway).
       - name: Build vega-virtual-device-host image
         uses: docker/build-push-action@v6
         with:
@@ -76,10 +89,7 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: vega-virtual-device-host:ci
-          cache-from: |
-            type=gha,scope=host
-            type=gha,scope=host-ci
-          cache-to: type=gha,mode=max,scope=host-ci
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:buildcache
 
       # One build, one boot: the action's script runs the VVD checks and then the
       # Argent Vega screenshot test; the action also captures its own screenshot.
