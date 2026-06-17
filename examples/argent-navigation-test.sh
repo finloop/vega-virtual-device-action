@@ -91,34 +91,61 @@ capture() {
 
 settle() { sleep "${1:-2}"; }
 
-# --- navigation flow -------------------------------------------------------
-# Key counts are tuned to the Kepler Video App layout; non-black assertions are
-# robust to small layout shifts (the app, not its exact geometry, is what matters).
-echo "::group::Launch Kepler Video App"
+# wait_for <regex> [tries] [sleep] — re-describe until the element tree matches,
+# so we screenshot AFTER a transition lands rather than a stale frame. Returns 1
+# (and the caller proceeds anyway) if it never matches. Needs the toolkit attached.
+wait_for() {
+  local re="$1" tries="${2:-6}" nap="${3:-2}" i
+  for ((i = 1; i <= tries; i++)); do
+    argent run describe --udid "$SERIAL" 2>/dev/null | grep -qiE "$re" && return 0
+    sleep "$nap"
+  done
+  return 1
+}
+
+# --- launch + attach automation toolkit ------------------------------------
+# The Vega automation toolkit attaches at app launch; on a FRESH install (CI) the
+# first launch can race it, leaving an empty tree — the app isn't fully interactive
+# yet, so D-pad presses get dropped and screens repeat. Launch, then restart-app
+# until describe returns a real UI tree (argent-vega guidance), so the app is loaded
+# and focus is deterministic before we navigate.
+echo "::group::Launch Kepler Video App + attach toolkit"
 argent run launch-app --udid "$SERIAL" --bundleId "$APP_ID" >/dev/null 2>&1 || true
 settle 6
+for attempt in 1 2 3 4; do
+  if wait_for '\[clickable\]' 4 2; then echo "automation toolkit attached (attempt ${attempt})"; break; fi
+  echo "toolkit tree empty; restarting app to attach it (attempt ${attempt})..."
+  argent run restart-app --udid "$SERIAL" --bundleId "$APP_ID" >/dev/null 2>&1 || true
+  settle 8
+done
+echo "::endgroup::"
+
+# --- navigation flow -------------------------------------------------------
+# Key counts are tuned to the Kepler Video App layout; transitions are gated on
+# describe (wait_for) so a slow CI render doesn't capture a stale frame.
+echo "::group::Browse home"
 capture home                       # browse: hero banner + Latest Hits + Classics
 echo "::endgroup::"
 
 echo "::group::Browse carousels"
-press down;    settle 2; capture row-latest-hits   # focus first card (focus scales it up)
-press right 3; settle 2; capture row-scrolled      # carousel scrolled right
-press down;    settle 2; capture row-classics      # second row (Classics)
+press down;    settle 3; capture row-latest-hits   # focus first card (focus scales it up)
+press right 3; settle 3; capture row-scrolled      # carousel scrolled right
+press down;    settle 3; capture row-classics      # second row (Classics)
 echo "::endgroup::"
 
 echo "::group::Open details + play"
-press up;      settle 1            # back up to a focused content card
-press select;  settle 3; capture details            # details page (Play / Add / Rent + Related)
-press select;  settle 6; capture player 0           # video player (BEST-EFFORT, may be black)
-press back;    settle 2; capture details-return     # back on details
-press back;    settle 2; capture browse-return      # back on browse
+press up;      settle 2                                   # back up to a focused content card
+press select;  wait_for 'play-movie' 6 2; settle 2; capture details   # details page
+press select;  settle 8; capture player 0                 # video player (BEST-EFFORT, may be black)
+press back;    wait_for 'play-movie' 6 2; settle 1; capture details-return
+press back;    wait_for 'carousel' 6 2;  settle 1; capture browse-return
 echo "::endgroup::"
 
 echo "::group::Side navigation"
-press left 8;  settle 2; capture nav-rail           # left rail expands (Home/Search/Settings)
+press left 8;  settle 3; capture nav-rail           # left rail expands (Home/Search/Settings)
 press up 3;    settle 1                              # clamp focus to the top of the rail (Home)
 press down 2;  settle 1                              # Home -> Search -> Settings (deterministic from top)
-press select;  settle 3; capture settings           # Settings screen (device info, gradient bg)
+press select;  wait_for 'country code|manufacturer' 6 2; settle 2; capture settings   # Settings screen
 press back;    settle 2
 echo "::endgroup::"
 
