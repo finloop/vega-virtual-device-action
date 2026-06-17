@@ -44,6 +44,23 @@ SERIAL="$(argent_vega_serial)"
 echo "Vega serial: $SERIAL"
 echo "::endgroup::"
 
+echo "::group::Ensure Kepler Video App is installed"
+# A stock VVD has NO pre-installed user apps, so install the app from $VPKG if it
+# isn't already present (CI downloads the prebuilt vpkg from the repo's release).
+# On a device where it's already installed (e.g. a local dev VVD) this is a no-op.
+PKG_ID="${APP_ID%.main}"   # com.amazondeveloper.keplervideoapp
+if argent run list-installed-apps --udid "$SERIAL" 2>/dev/null | grep -q "$PKG_ID"; then
+  echo "$PKG_ID already installed."
+elif [ -n "${VPKG:-}" ] && [ -f "$VPKG" ]; then
+  echo "Installing $PKG_ID from $VPKG"
+  vega device install-app -p "$VPKG"   # --device optional: only the VVD is present
+else
+  echo "ERROR: $PKG_ID is not installed and no usable VPKG was provided."
+  echo "Set VPKG to a keplervideoapp_aarch64.vpkg (CI downloads it from the release), or pre-install the app."
+  exit 1
+fi
+echo "::endgroup::"
+
 # --- helpers ---------------------------------------------------------------
 step=0
 declare -a FAILS=()

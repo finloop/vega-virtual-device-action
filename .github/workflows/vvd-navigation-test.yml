@@ -30,6 +30,11 @@ on:
 # overrides it; pull_request runs (no inputs) fall back to this default.
 env:
   ARGENT_TARBALL: ${{ github.event.inputs.argent-tarball || 'https://github.com/finloop/argent/releases/download/v0.10.2-vega/swmansion-argent-0.10.2-vega.tgz' }}
+  # A stock VVD has no pre-installed user apps, so CI installs the Kepler Video App
+  # from a prebuilt vpkg hosted as a release asset on this repo (building it from
+  # source needs Java + a full Shaka Player build). Re-upload to that release to bump.
+  KEPLERVIDEOAPP_RELEASE: fixtures-keplervideoapp-0.22.1
+  KEPLERVIDEOAPP_VPKG: keplervideoapp_aarch64.vpkg
 
 jobs:
   vvd-navigate:
@@ -84,9 +89,23 @@ jobs:
             type=gha,scope=host-ci
           cache-to: type=gha,mode=max,scope=host-ci
 
-      # One build, one boot: the action boots the VVD, then the script launches the
-      # Kepler Video App and walks it with Argent, screenshotting each step. The
-      # script exits non-zero if any required UI screen is black (rendering broke).
+      # Fetch the prebuilt app vpkg onto the runner (gh is available here, not in the
+      # action container). It lands under the checkout, which the action mounts at
+      # /workspace, so the script installs it via $VPKG.
+      - name: Download Kepler Video App vpkg (test fixture)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p fixtures
+          gh release download "$KEPLERVIDEOAPP_RELEASE" \
+            -R "${{ github.repository }}" \
+            -p "$KEPLERVIDEOAPP_VPKG" \
+            -D fixtures --clobber
+          ls -lh fixtures/
+
+      # One build, one boot: the action boots the VVD, then the script installs the
+      # Kepler Video App (from $VPKG), launches it and walks it with Argent,
+      # screenshotting each step. It exits non-zero if any required UI screen is black.
       - name: Boot VVD; navigate Kepler Video App; screenshot each step
         id: vvd
         uses: ./vega-virtual-device-action
@@ -95,7 +114,7 @@ jobs:
           pull: false
           boot-timeout: 420
           screenshot-path: artifacts/vvd-nav-final.png
-          container-options: -e ARGENT_TARBALL=${{ env.ARGENT_TARBALL }}
+          container-options: -e ARGENT_TARBALL=${{ env.ARGENT_TARBALL }} -e VPKG=fixtures/${{ env.KEPLERVIDEOAPP_VPKG }}
           script: |
             set -ex
             bash examples/argent-navigation-test.sh
