@@ -1,4 +1,4 @@
-FROM --platform=linux/amd64 ubuntu:22.04
+FROM --platform=linux/amd64 ubuntu:24.04
 
 SHELL ["/bin/bash", "-c"]
 
@@ -13,8 +13,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 #   - libgl1/libegl1 + x11/xcb libs are the GL/X loaders.
 #   - python3 drives the emulator-console screenshot (scripts/vvd-screenshot.sh)
 #     and unpacks the platform-tools zip below.
-# Node.js is NOT installed from apt (Ubuntu 22.04 ships Node 12, too old for the
-# Vega CLI tooling and for Argent which needs Node 18+); Node 20 is installed below.
+# Node.js is NOT installed from apt (Ubuntu 24.04 ships Node 18; we pin Node 20 LTS
+# below for reproducibility, which the Vega CLI tooling and Argent are validated on).
 RUN apt-get update && \
     apt-get install -y \
       curl \
