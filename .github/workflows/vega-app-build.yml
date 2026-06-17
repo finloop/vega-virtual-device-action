@@ -69,10 +69,13 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # Build the host image locally (self-contained, like vvd-action-test.yml).
-      # The expensive apt + Vega SDK (get_vvm.sh) layers are restored from the
-      # persistent registry cache docker-publish.yml writes on push to main —
-      # never LRU-evicted and readable from any PR (unlike type=gha), so the flaky
-      # installer is not re-run unless the PR changes apt/node/.sdk-version.
+      # Two-tier cache (see vvd-action-test.yml for the full rationale):
+      #   - type=registry (…:buildcache) — primary, written on push to main,
+      #     never evicted: the apt + Vega SDK (get_vvm.sh) layers hit on any PR
+      #     that doesn't bump apt/node/.sdk-version, so no installer re-run.
+      #   - type=gha scope=host-ci (mode=min) — supplementary per-PR warmth so a
+      #     PR that *does* bump the SDK doesn't re-download it on every push;
+      #     harmless if evicted (registry still serves the unchanged SDK layer).
       - name: Build vega-virtual-device-host image
         uses: docker/build-push-action@v6
         with:
@@ -81,7 +84,10 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: vega-virtual-device-host:ci
-          cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:buildcache
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:buildcache
+            type=gha,scope=host-ci
+          cache-to: type=gha,mode=min,scope=host-ci
 
       # One build, one boot: scaffold from the template, build the RELEASE vpkg,
       # install + launch on the VVD; the action captures the screenshot afterwards.
