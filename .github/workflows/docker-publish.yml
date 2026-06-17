@@ -116,6 +116,9 @@ jobs:
           # installer. cache-to runs only on push/tag — PRs lack registry write
           # auth and must not clobber the shared cache; cache-from is read by
           # everyone, including vvd-action-test.yml / vega-app-build.yml.
+          #
+          # KEEP IN SYNC: this set: block is duplicated verbatim in the retry
+          # step below ("Build and push (retry)") — update both together.
           set: |
             full.cache-from=type=registry,ref=${{ env.IMAGE_HOST }}:buildcache
             build-only.cache-from=type=registry,ref=${{ env.IMAGE_BUILDER }}:buildcache
@@ -138,6 +141,7 @@ jobs:
             cwd://${{ steps.meta-full.outputs.bake-file }}
             cwd://${{ steps.meta-build-only.outputs.bake-file }}
           push: ${{ github.event_name != 'pull_request' }}
+          # KEEP IN SYNC with the "Build and push" step above (same set: block).
           set: |
             full.cache-from=type=registry,ref=${{ env.IMAGE_HOST }}:buildcache
             build-only.cache-from=type=registry,ref=${{ env.IMAGE_BUILDER }}:buildcache
