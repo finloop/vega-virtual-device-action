@@ -14,7 +14,7 @@ runner required (see [No GPU needed](#no-gpu-needed)).
 ```yaml
 jobs:
   vvd-test:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read

@@ -50,7 +50,7 @@ Boot the VVD on a free `ubuntu` runner and run a script against it:
 ```yaml
 jobs:
   vvd-test:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read

@@ -27,7 +27,7 @@ on:
 jobs:
   build-sample-app:
     name: Scaffold, build release, run, screenshot
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     # contents: write — the screenshot-comment action commits the PNG to its
     #   own branch (webpage-screenshot-action-branch).

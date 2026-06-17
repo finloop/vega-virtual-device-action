@@ -39,7 +39,7 @@ env:
 jobs:
   vvd-navigate:
     name: Boot VVD, navigate app, screenshot each step
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     # contents: write — the screenshot-comment step commits the PNGs to a dedicated
     #   ci-screenshots branch (so they can be embedded inline).
