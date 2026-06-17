@@ -7,7 +7,7 @@ description: >-
 
 inputs:
   github-token:
-    description: 'Token with contents:write + pull-requests:write. Pass ${{ github.token }}.'
+    description: 'Token with contents:write + pull-requests:write. Pass the workflow github.token.'
     required: true
   marker:
     description: 'Unique slug used as the hidden <!-- marker --> that dedups/updates the comment (also the default upload sub-path).'
