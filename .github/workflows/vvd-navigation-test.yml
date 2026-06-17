@@ -1,0 +1,228 @@
+name: VVD navigation screenshots
+
+# Boots the VVD via vega-virtual-device-action on a free GitHub-hosted runner and
+# navigates the pre-installed Kepler Video App with Argent — browse → carousels →
+# details → player → settings — capturing a screenshot at every step. Because the
+# VVD renders on Mesa llvmpipe (CPU), the run of non-black frames is a software-GL
+# rendering smoke test across focus changes and full screen transitions.
+#
+# Like vvd-action-test.yml this builds the host image here (PR-only) with the same
+# layer cache; on push to main / tags docker-publish.yml builds and publishes it.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'vega-virtual-device-action/**'
+      - 'scripts/**'
+      - 'examples/argent-navigation-test.sh'
+      - 'examples/lib/**'
+      - 'Dockerfile'
+      - '.sdk-version'
+      - '.github/workflows/vvd-navigation-test.yml'
+  workflow_dispatch:
+    inputs:
+      argent-tarball:
+        description: 'Argent release tarball URL to test (blank = pinned default below)'
+        required: false
+        default: ''
+
+# Single workflow-level source of the Argent tarball URL: a dispatch input
+# overrides it; pull_request runs (no inputs) fall back to this default.
+env:
+  ARGENT_TARBALL: ${{ github.event.inputs.argent-tarball || 'https://github.com/finloop/argent/releases/download/v0.10.2-vega/swmansion-argent-0.10.2-vega.tgz' }}
+  # A stock VVD has no pre-installed user apps, so CI installs the Kepler Video App
+  # from a prebuilt vpkg hosted as a release asset on this repo (building it from
+  # source needs Java + a full Shaka Player build). Re-upload to that release to bump.
+  KEPLERVIDEOAPP_RELEASE: fixtures-keplervideoapp-0.22.1
+  KEPLERVIDEOAPP_VPKG: keplervideoapp_aarch64.vpkg
+
+jobs:
+  vvd-navigate:
+    name: Boot VVD, navigate app, screenshot each step
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    # contents: write — the screenshot-comment step commits the PNGs to a dedicated
+    #   ci-screenshots branch (so they can be embedded inline).
+    # pull-requests: write — to post/update the screenshot comment on the PR.
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build the host image locally so the test is self-contained and does not
+      # depend on the GHCR package already existing / being public. The layer cache
+      # (type=gha) reuses the expensive apt + Vega SDK layers:
+      #   - scope=host     reuses what docker-publish.yml pushed to the GHA cache.
+      #   - scope=host-ci  the PR smoke tests' shared warmth, so repeated pushes on
+      #                    a branch only rebuild changed layers.
+      - name: Build vega-virtual-device-host image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: vega-virtual-device-host:ci
+          cache-from: |
+            type=gha,scope=host
+            type=gha,scope=host-ci
+          cache-to: type=gha,mode=max,scope=host-ci
+
+      # Fetch the prebuilt app vpkg onto the runner (gh is available here, not in the
+      # action container). It lands under the checkout, which the action mounts at
+      # /workspace, so the script installs it via $VPKG.
+      - name: Download Kepler Video App vpkg (test fixture)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p fixtures
+          gh release download "$KEPLERVIDEOAPP_RELEASE" \
+            -R "${{ github.repository }}" \
+            -p "$KEPLERVIDEOAPP_VPKG" \
+            -D fixtures --clobber
+          ls -lh fixtures/
+
+      # One build, one boot: the action boots the VVD, then the script installs the
+      # Kepler Video App (from $VPKG), launches it and walks it with Argent,
+      # screenshotting each step. It exits non-zero if any required UI screen is black.
+      - name: Boot VVD; navigate Kepler Video App; screenshot each step
+        id: vvd
+        uses: ./vega-virtual-device-action
+        with:
+          image: vega-virtual-device-host:ci
+          pull: false
+          boot-timeout: 420
+          screenshot-path: artifacts/vvd-nav-final.png
+          container-options: -e ARGENT_TARBALL=${{ env.ARGENT_TARBALL }} -e VPKG=fixtures/${{ env.KEPLERVIDEOAPP_VPKG }}
+          script: |
+            set -ex
+            bash examples/argent-navigation-test.sh
+
+      - name: Show outputs
+        if: always()
+        run: |
+          echo "boot-status=${{ steps.vvd.outputs.boot-status }}"
+          echo "screenshot=${{ steps.vvd.outputs.screenshot }}"
+
+      # The script writes its Markdown table to artifacts/summary.md ($GITHUB_STEP_SUMMARY
+      # is not visible inside the action's container), so surface it in the job summary here.
+      - name: Publish navigation summary
+        if: always()
+        run: |
+          if [ -f artifacts/summary.md ]; then
+            cat artifacts/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No navigation summary produced (the script may have failed before reporting)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vvd-navigation-screenshots
+          path: artifacts/
+          if-no-files-found: warn
+
+      # Post every navigation screenshot as a single inline PR comment so the run
+      # can be reviewed without downloading the artifact. Same mechanism as
+      # vega-app-build.yml: host the PNGs on a dedicated `ci-screenshots` branch via
+      # the Contents API (pure API calls — no local git) and embed them with
+      # github.com/.../raw/<branch>/<path> URLs, which render inline for authorized
+      # viewers of this private repo (raw.githubusercontent.com URLs would not). The
+      # comment is updated in place on re-runs via a hidden marker, and runs even on
+      # failure so black/missing frames are visible. continue-on-error so a commenting
+      # hiccup (e.g. a fork PR's read-only token) can't fail the build/run check.
+      - name: Comment PR with navigation screenshots
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.base_ref }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          BOOT_STATUS: ${{ steps.vvd.outputs.boot-status }}
+          SHOT_BRANCH: ci-screenshots
+        run: |
+          set -euo pipefail
+          MARKER='<!-- vvd-navigation-screenshots -->'
+
+          shopt -s nullglob
+          shots=(artifacts/[0-9][0-9]-*.png)
+          if [ ${#shots[@]} -eq 0 ]; then
+            echo "No navigation screenshots found; skipping comment."
+            exit 0
+          fi
+
+          # 1. Ensure the screenshots branch exists (created from the PR base).
+          if ! gh api "repos/$REPO/branches/$SHOT_BRANCH" >/dev/null 2>&1; then
+            base_sha=$(gh api "repos/$REPO/git/refs/heads/$BASE_REF" --jq '.object.sha')
+            gh api "repos/$REPO/git/refs" -f ref="refs/heads/$SHOT_BRANCH" -f sha="$base_sha" >/dev/null
+          fi
+
+          # 2. Upload each PNG (unique path per run, so no existing-blob SHA needed)
+          #    and build a 2-column HTML image grid. The base64 can exceed the 128KB
+          #    single-arg limit, so pass each PUT body via a file with --input.
+          grid="<table>"
+          n=0
+          for shot in "${shots[@]}"; do
+            name=$(basename "$shot" .png)
+            dest="screenshots/pr-${PR}/nav-${GITHUB_RUN_ID}/${name}.png"
+            base64 -w0 "$shot" > "$RUNNER_TEMP/shot.b64"
+            jq -n \
+              --arg message "CI: VVD navigation ${name} for PR #${PR} (${SHA})" \
+              --arg branch "$SHOT_BRANCH" \
+              --rawfile content "$RUNNER_TEMP/shot.b64" \
+              '{message: $message, branch: $branch, content: $content}' > "$RUNNER_TEMP/put.json"
+            gh api -X PUT "repos/$REPO/contents/$dest" --input "$RUNNER_TEMP/put.json" >/dev/null
+            url="https://github.com/$REPO/raw/$SHOT_BRANCH/$dest"
+            if [ $((n % 2)) -eq 0 ]; then grid="${grid}<tr>"; fi
+            grid="${grid}<td align=\"center\" width=\"50%\"><sub><code>${name}</code></sub><br><img width=\"380\" src=\"${url}\"></td>"
+            n=$((n + 1))
+            if [ $((n % 2)) -eq 0 ]; then grid="${grid}</tr>"; fi
+          done
+          if [ $((n % 2)) -ne 0 ]; then grid="${grid}</tr>"; fi
+          grid="${grid}</table>"
+
+          # 3. Assemble the comment body (summary table appended if present).
+          summary=""
+          if [ -f artifacts/summary.md ]; then summary="$(cat artifacts/summary.md)"; fi
+          body="${MARKER}
+          ### VVD navigation screenshots
+
+          Pre-installed Kepler Video App navigated on the VVD (commit \`${SHA}\`). Boot status: \`${BOOT_STATUS}\`. Software-GL (llvmpipe) render check — each frame must be non-black.
+
+          ${grid}
+
+          ${summary}"
+
+          # 4. Create or update the PR comment (dedup via the hidden marker).
+          cid=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                  --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | head -n1 || true)
+          if [ -n "$cid" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$cid" -f body="$body" >/dev/null
+            echo "Updated comment $cid"
+          else
+            gh api "repos/$REPO/issues/$PR/comments" -f body="$body" >/dev/null
+            echo "Created comment"
+          fi
