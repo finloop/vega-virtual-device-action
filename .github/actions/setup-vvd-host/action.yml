@@ -1,0 +1,67 @@
+name: Set up VVD host runner
+description: >-
+  Prepare a GitHub-hosted runner to boot the Vega Virtual Device: free disk
+  space, enable KVM, set up Buildx, log in to GHCR (to restore the registry
+  build cache), and build the vega-virtual-device-host:ci image locally. Defined
+  once and used by every workflow that boots the VVD. The repository must already
+  be checked out (a local `uses: ./...` requires it), and the calling job must
+  grant `permissions: packages: read` so the registry build cache can be restored.
+
+runs:
+  using: composite
+  steps:
+    - name: Free disk space
+      uses: jlumbroso/free-disk-space@main
+      with:
+        tool-cache: true
+        android: true
+        dotnet: true
+        haskell: true
+        large-packages: false
+        swap-storage: false
+
+    - name: Enable KVM
+      shell: bash
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    # Read access to the GHCR registry build cache restored in the build below.
+    # github.token is read-only for packages when the job grants packages: read;
+    # on a fork PR it may not see a private cache — buildx then treats it as a
+    # miss and rebuilds, so logging in here is harmless.
+    - name: Log in to GHCR
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ github.token }}
+
+    # Build the host image locally so the test exercises THIS PR's Dockerfile /
+    # scripts changes (it can't just pull the published image). Two-tier cache:
+    #   - type=registry (…:buildcache) is the PRIMARY cache — written by
+    #     docker-publish.yml on push to main, never LRU-evicted, readable from any
+    #     PR. So the expensive apt + Vega SDK (get_vvm.sh) layers are a hit on any
+    #     PR that doesn't bump apt/node/.sdk-version: no installer re-run.
+    #   - type=gha scope=host-ci is SUPPLEMENTARY per-PR warmth (mode=min keeps it
+    #     small). If a PR *does* bump apt/node/.sdk-version, the first push rebuilds
+    #     the SDK layer and stores it here so later pushes on the SAME PR branch
+    #     don't re-download it; if evicted, the registry cache still serves the
+    #     unchanged SDK layer, so eviction only costs cheap top-layer warmth.
+    - name: Build vega-virtual-device-host image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: Dockerfile
+        platforms: linux/amd64
+        load: true
+        tags: vega-virtual-device-host:ci
+        cache-from: |
+          type=registry,ref=ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:buildcache
+          type=gha,scope=host-ci
+        cache-to: type=gha,mode=min,scope=host-ci

@@ -104,7 +104,10 @@ runs:
           url="$(upload "${shots[0]}")"
           images_md="![${IN_TITLE}](${url})"
         else
-          images_md="<table>"
+          # Collapse the multi-image grid behind a <details> so it doesn't flood
+          # the PR conversation; one click expands it. (Single screenshots render
+          # inline above.)
+          images_md="<details><summary>🖼 ${#shots[@]} screenshots (click to expand)</summary><table>"
           n=0
           for shot in "${shots[@]}"; do
             name="$(basename "$shot" .png)"
@@ -115,7 +118,7 @@ runs:
             if [ $((n % 2)) -eq 0 ]; then images_md="${images_md}</tr>"; fi
           done
           if [ $((n % 2)) -ne 0 ]; then images_md="${images_md}</tr>"; fi
-          images_md="${images_md}</table>"
+          images_md="${images_md}</table></details>"
         fi
 
         # 3. Optional summary file, appended verbatim.
