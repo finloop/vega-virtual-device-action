@@ -1,0 +1,142 @@
+name: PR screenshot comment
+description: >-
+  Post CI screenshot(s) as an inline pull-request comment, hosting the PNG(s) on a
+  dedicated branch via the Contents API (so they render inline for private repos).
+  One image renders inline; several render as a 2-column grid. The comment is
+  created once and updated in place on re-runs (deduped by a hidden marker).
+
+inputs:
+  github-token:
+    description: 'Token with contents:write + pull-requests:write. Pass ${{ github.token }}.'
+    required: true
+  marker:
+    description: 'Unique slug used as the hidden <!-- marker --> that dedups/updates the comment (also the default upload sub-path).'
+    required: true
+  title:
+    description: 'Heading shown above the screenshots (also the single-image alt text).'
+    required: true
+  intro:
+    description: 'Optional Markdown shown under the heading. Interpolate the commit SHA / boot status at the call site.'
+    required: false
+    default: ''
+  images:
+    description: 'Glob of PNGs to post. Exactly one match renders inline; more than one renders a 2-column grid.'
+    required: false
+    default: 'artifacts/[0-9][0-9]-*.png'
+  summary-file:
+    description: 'Optional path to a Markdown file appended to the comment body when it exists.'
+    required: false
+    default: ''
+  branch:
+    description: 'Branch used to host the uploaded PNGs for inline embedding.'
+    required: false
+    default: 'ci-screenshots'
+  slug:
+    description: 'Sub-path component for uploaded files under screenshots/pr-<n>/. Defaults to the marker.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        IN_MARKER: ${{ inputs.marker }}
+        IN_TITLE: ${{ inputs.title }}
+        IN_INTRO: ${{ inputs.intro }}
+        IN_IMAGES: ${{ inputs.images }}
+        IN_SUMMARY: ${{ inputs.summary-file }}
+        IN_BRANCH: ${{ inputs.branch }}
+        IN_SLUG: ${{ inputs.slug }}
+      run: |
+        set -euo pipefail
+
+        # Self-source the PR context from the runner env / event payload so callers
+        # only pass what differs between workflows.
+        REPO="$GITHUB_REPOSITORY"
+        BASE_REF="${GITHUB_BASE_REF:-}"
+        PR="$(jq -r '.pull_request.number // empty' "$GITHUB_EVENT_PATH")"
+        SHA="$(jq -r '.pull_request.head.sha // empty' "$GITHUB_EVENT_PATH")"
+        BRANCH="$IN_BRANCH"
+        SLUG="${IN_SLUG:-$IN_MARKER}"
+        MARKER="<!-- ${IN_MARKER} -->"
+
+        if [ -z "$PR" ]; then
+          echo "Not a pull_request event (no PR number); skipping comment."
+          exit 0
+        fi
+
+        shopt -s nullglob
+        # shellcheck disable=SC2206  # word-split + glob-expand the pattern on purpose
+        shots=( $IN_IMAGES )
+        if [ ${#shots[@]} -eq 0 ]; then
+          echo "No screenshots matched '${IN_IMAGES}'; skipping comment."
+          exit 0
+        fi
+
+        # 1. Ensure the screenshots branch exists (created from the PR base).
+        if ! gh api "repos/$REPO/branches/$BRANCH" >/dev/null 2>&1; then
+          base_sha="$(gh api "repos/$REPO/git/refs/heads/$BASE_REF" --jq '.object.sha')"
+          gh api "repos/$REPO/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$base_sha" >/dev/null
+        fi
+
+        # Upload one PNG to the branch (unique path per run) and echo its raw URL.
+        # The base64 can exceed the 128KB single-arg limit, so pass the PUT body via
+        # a file with --input.
+        upload() {
+          local shot="$1" name dest
+          name="$(basename "$shot" .png)"
+          dest="screenshots/pr-${PR}/${SLUG}-${GITHUB_RUN_ID}/${name}.png"
+          base64 -w0 "$shot" > "$RUNNER_TEMP/shot.b64"
+          jq -n \
+            --arg message "CI: ${IN_TITLE} ${name} for PR #${PR} (${SHA})" \
+            --arg branch "$BRANCH" \
+            --rawfile content "$RUNNER_TEMP/shot.b64" \
+            '{message: $message, branch: $branch, content: $content}' > "$RUNNER_TEMP/put.json"
+          gh api -X PUT "repos/$REPO/contents/$dest" --input "$RUNNER_TEMP/put.json" >/dev/null
+          printf 'https://github.com/%s/raw/%s/%s' "$REPO" "$BRANCH" "$dest"
+        }
+
+        # 2. Upload the image(s) and build the body's image block: a single inline
+        #    image for one shot, else a 2-column HTML grid (renders in comments).
+        if [ "${#shots[@]}" -eq 1 ]; then
+          url="$(upload "${shots[0]}")"
+          images_md="![${IN_TITLE}](${url})"
+        else
+          images_md="<table>"
+          n=0
+          for shot in "${shots[@]}"; do
+            name="$(basename "$shot" .png)"
+            url="$(upload "$shot")"
+            if [ $((n % 2)) -eq 0 ]; then images_md="${images_md}<tr>"; fi
+            images_md="${images_md}<td align=\"center\" width=\"50%\"><sub><code>${name}</code></sub><br><img width=\"380\" src=\"${url}\"></td>"
+            n=$((n + 1))
+            if [ $((n % 2)) -eq 0 ]; then images_md="${images_md}</tr>"; fi
+          done
+          if [ $((n % 2)) -ne 0 ]; then images_md="${images_md}</tr>"; fi
+          images_md="${images_md}</table>"
+        fi
+
+        # 3. Optional summary file, appended verbatim.
+        summary=""
+        if [ -n "$IN_SUMMARY" ] && [ -f "$IN_SUMMARY" ]; then
+          summary="$(cat "$IN_SUMMARY")"
+        fi
+
+        # 4. Assemble the comment body (hidden marker first for dedup). printf with
+        #    explicit newlines avoids the leading-whitespace trap of a multi-line
+        #    string literal inside this indented YAML block.
+        body="$(printf '%s\n### %s\n\n%s\n\n%s\n\n%s\n' \
+          "$MARKER" "$IN_TITLE" "$IN_INTRO" "$images_md" "$summary")"
+
+        # 5. Create the comment, or update the existing one in place (dedup by marker).
+        cid="$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
+                 --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | head -n1 || true)"
+        if [ -n "$cid" ]; then
+          gh api -X PATCH "repos/$REPO/issues/comments/$cid" -f body="$body" >/dev/null
+          echo "Updated comment $cid"
+        else
+          gh api "repos/$REPO/issues/$PR/comments" -f body="$body" >/dev/null
+          echo "Created comment"
+        fi

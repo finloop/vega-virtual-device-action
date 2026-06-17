@@ -1,10 +1,12 @@
-name: VVD navigation screenshots
+name: VVD Appium navigation screenshots
 
 # Boots the VVD via vega-virtual-device-action on a free GitHub-hosted runner and
-# navigates the pre-installed Kepler Video App with Argent — browse → carousels →
-# details → player → settings — capturing a screenshot at every step. Because the
-# VVD renders on Mesa llvmpipe (CPU), the run of non-black frames is a software-GL
-# rendering smoke test across focus changes and full screen transitions.
+# navigates the pre-installed Kepler Video App with **Appium** (WebdriverIO + the
+# Vega "kepler" driver) — browse → carousels → details → player → settings —
+# screenshotting each step with Appium's own takeScreenshot(). It exercises the
+# official Appium-on-Vega path end-to-end (install Appium + kepler driver, start
+# the server, create a session, inject D-pad keys) on the headless software-GL
+# (Mesa llvmpipe) VVD.
 #
 # Like vvd-action-test.yml this builds the host image here (PR-only) with the same
 # layer cache; on push to main / tags docker-publish.yml builds and publishes it.
@@ -14,40 +16,53 @@ on:
     paths:
       - 'vega-virtual-device-action/**'
       - 'scripts/**'
-      - 'examples/argent-navigation-test.sh'
-      - 'examples/lib/**'
+      - 'examples/appium-navigation-test.sh'
+      - 'examples/appium/**'
       - 'Dockerfile'
       - '.sdk-version'
-      - '.github/workflows/vvd-navigation-test.yml'
+      - '.github/workflows/vvd-appium-test.yml'
       - '.github/actions/pr-screenshot-comment/**'
   workflow_dispatch:
     inputs:
-      argent-tarball:
-        description: 'Argent release tarball URL to test (blank = pinned default below)'
+      appium-version:
+        description: 'Appium server version (blank = pinned default)'
         required: false
         default: ''
+      kepler-driver-version:
+        description: 'Vega kepler Appium driver version (blank = pinned default)'
+        required: false
+        default: ''
+      screenshot-policy:
+        description: 'warn (black screenshots reported) or require (black fails the job)'
+        required: false
+        default: 'warn'
 
-# Single workflow-level source of the Argent tarball URL: a dispatch input
-# overrides it; pull_request runs (no inputs) fall back to this default.
+# Workflow-level sources: a dispatch input overrides each; pull_request runs (no
+# inputs) fall back to the pinned defaults. Versions per the Appium-for-Vega docs.
 env:
-  ARGENT_TARBALL: ${{ github.event.inputs.argent-tarball || 'https://github.com/finloop/argent/releases/download/v0.10.2-vega/swmansion-argent-0.10.2-vega.tgz' }}
+  APPIUM_VERSION: ${{ github.event.inputs.appium-version || '2.2.2' }}
+  KEPLER_DRIVER_VERSION: ${{ github.event.inputs.kepler-driver-version || '3.30.0' }}
+  SCREENSHOT_POLICY: ${{ github.event.inputs.screenshot-policy || 'warn' }}
   # A stock VVD has no pre-installed user apps, so CI installs the Kepler Video App
-  # from a prebuilt vpkg hosted as a release asset on this repo (building it from
-  # source needs Java + a full Shaka Player build). Re-upload to that release to bump.
+  # from a prebuilt vpkg hosted as a release asset on this repo (same fixture as
+  # the Argent navigation test). Re-upload to that release to bump.
   KEPLERVIDEOAPP_RELEASE: fixtures-keplervideoapp-0.22.1
   KEPLERVIDEOAPP_VPKG: keplervideoapp_aarch64.vpkg
+  APP_ID: com.amazondeveloper.keplervideoapp.main
 
 jobs:
-  vvd-navigate:
-    name: Boot VVD, navigate app, screenshot each step
+  vvd-appium:
+    name: Boot VVD, navigate app with Appium, screenshot each step
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     # contents: write — the screenshot-comment step commits the PNGs to a dedicated
     #   ci-screenshots branch (so they can be embedded inline).
     # pull-requests: write — to post/update the screenshot comment on the PR.
+    # packages: read — to RESTORE the registry build cache written by docker-publish.yml.
     permissions:
       contents: write
       pull-requests: write
+      packages: read
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -71,12 +86,18 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Build the host image locally so the test is self-contained and does not
-      # depend on the GHCR package already existing / being public. The layer cache
-      # (type=gha) reuses the expensive apt + Vega SDK layers:
-      #   - scope=host     reuses what docker-publish.yml pushed to the GHA cache.
-      #   - scope=host-ci  the PR smoke tests' shared warmth, so repeated pushes on
-      #                    a branch only rebuild changed layers.
+      # Read access to the GHCR registry build cache restored in the build below.
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build the host image locally so the test exercises THIS PR's Dockerfile /
+      # scripts. Two-tier cache (same as vvd-action-test.yml): the registry
+      # buildcache (written by docker-publish.yml) serves the expensive apt + Vega
+      # SDK layers; gha scope=host-ci is supplementary per-PR warmth.
       - name: Build vega-virtual-device-host image
         uses: docker/build-push-action@v6
         with:
@@ -86,13 +107,13 @@ jobs:
           load: true
           tags: vega-virtual-device-host:ci
           cache-from: |
-            type=gha,scope=host
+            type=registry,ref=ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:buildcache
             type=gha,scope=host-ci
-          cache-to: type=gha,mode=max,scope=host-ci
+          cache-to: type=gha,mode=min,scope=host-ci
 
-      # Fetch the prebuilt app vpkg onto the runner (gh is available here, not in the
-      # action container). It lands under the checkout, which the action mounts at
-      # /workspace, so the script installs it via $VPKG.
+      # Fetch the prebuilt app vpkg onto the runner (gh is available here, not in
+      # the action container). It lands under the checkout, which the action mounts
+      # at /workspace, so the script installs it via $VPKG.
       - name: Download Kepler Video App vpkg (test fixture)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -105,20 +126,26 @@ jobs:
           ls -lh fixtures/
 
       # One build, one boot: the action boots the VVD, then the script installs the
-      # Kepler Video App (from $VPKG), launches it and walks it with Argent,
-      # screenshotting each step. It exits non-zero if any required UI screen is black.
-      - name: Boot VVD; navigate Kepler Video App; screenshot each step
+      # Kepler Video App, starts Appium and navigates it with WebdriverIO,
+      # screenshotting each step. It exits non-zero if Appium can't drive the app
+      # (and, when SCREENSHOT_POLICY=require, if a required screen is black).
+      - name: Boot VVD; navigate Kepler Video App with Appium; screenshot each step
         id: vvd
         uses: ./vega-virtual-device-action
         with:
           image: vega-virtual-device-host:ci
           pull: false
           boot-timeout: 420
-          screenshot-path: artifacts/vvd-nav-final.png
-          container-options: -e ARGENT_TARBALL=${{ env.ARGENT_TARBALL }} -e VPKG=fixtures/${{ env.KEPLERVIDEOAPP_VPKG }}
+          screenshot-path: artifacts/appium-final.png
+          container-options: >-
+            -e VPKG=fixtures/${{ env.KEPLERVIDEOAPP_VPKG }}
+            -e APP_ID=${{ env.APP_ID }}
+            -e APPIUM_VERSION=${{ env.APPIUM_VERSION }}
+            -e KEPLER_DRIVER_VERSION=${{ env.KEPLER_DRIVER_VERSION }}
+            -e SCREENSHOT_POLICY=${{ env.SCREENSHOT_POLICY }}
           script: |
             set -ex
-            bash examples/argent-navigation-test.sh
+            bash examples/appium-navigation-test.sh
 
       - name: Show outputs
         if: always()
@@ -140,7 +167,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: vvd-navigation-screenshots
+          name: vvd-appium-screenshots
           path: artifacts/
           if-no-files-found: warn
 
@@ -148,14 +175,14 @@ jobs:
       # shared local action (.github/actions/pr-screenshot-comment). Runs even on
       # failure so black/missing frames are visible; continue-on-error so a
       # commenting hiccup (e.g. a fork PR's read-only token) can't fail the run.
-      - name: Comment PR with navigation screenshots
+      - name: Comment PR with Appium navigation screenshots
         if: always() && github.event_name == 'pull_request'
         continue-on-error: true
         uses: ./.github/actions/pr-screenshot-comment
         with:
           github-token: ${{ github.token }}
-          marker: vvd-navigation-screenshots
-          title: VVD navigation screenshots
-          intro: "Pre-installed Kepler Video App navigated on the VVD (commit `${{ github.event.pull_request.head.sha }}`). Boot status: `${{ steps.vvd.outputs.boot-status }}`. Software-GL (llvmpipe) render check — each frame must be non-black."
+          marker: vvd-appium-screenshots
+          title: VVD Appium navigation screenshots
+          intro: "Pre-installed Kepler Video App navigated on the VVD with Appium (WebdriverIO + kepler driver) at commit `${{ github.event.pull_request.head.sha }}`. Boot status: `${{ steps.vvd.outputs.boot-status }}`. Screenshots captured via Appium's `takeScreenshot()` under software GL (llvmpipe)."
           images: artifacts/[0-9][0-9]-*.png
           summary-file: artifacts/summary.md

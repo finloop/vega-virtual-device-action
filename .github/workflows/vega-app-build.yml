@@ -17,6 +17,7 @@ on:
       - 'examples/build-sample-vega-app.sh'
       - 'Dockerfile'
       - '.github/workflows/vega-app-build.yml'
+      - '.github/actions/pr-screenshot-comment/**'
   workflow_dispatch:
     inputs:
       template:
@@ -117,57 +118,16 @@ jobs:
           path: artifacts/
           if-no-files-found: warn
 
-      # Post the screenshot as an inline PR comment. We host the PNG on a
-      # dedicated `ci-screenshots` branch via the Contents API (pure API calls —
-      # no local git, so no container "dubious ownership" issues) and embed it
-      # with a github.com/.../raw/<branch>/<path> URL. That URL renders inline
-      # for authorized viewers of THIS private repo; a raw.githubusercontent.com
-      # URL would not (GitHub's image proxy can't authenticate to private
-      # content). The comment is updated in place on re-runs via a hidden marker.
-      # continue-on-error so a commenting hiccup (e.g. a fork PR's read-only
-      # token) can't fail the build/run check itself.
+      # Post the screenshot as an inline PR comment via the shared local action
+      # (.github/actions/pr-screenshot-comment) — a single image here. continue-on-error
+      # so a commenting hiccup (e.g. a fork PR's read-only token) can't fail the run.
       - name: Comment PR with screenshot
         if: always() && github.event_name == 'pull_request' && steps.vvd.outputs.screenshot != ''
         continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          PR: ${{ github.event.pull_request.number }}
-          BASE_REF: ${{ github.base_ref }}
-          SHA: ${{ github.event.pull_request.head.sha }}
-          SHOT: artifacts/vega-app.png
-          SHOT_BRANCH: ci-screenshots
-        run: |
-          set -euo pipefail
-          MARKER='<!-- vega-sample-app-screenshot -->'
-
-          # 1. Ensure the screenshots branch exists (created from the PR base).
-          if ! gh api "repos/$REPO/branches/$SHOT_BRANCH" >/dev/null 2>&1; then
-            base_sha=$(gh api "repos/$REPO/git/refs/heads/$BASE_REF" --jq '.object.sha')
-            gh api "repos/$REPO/git/refs" -f ref="refs/heads/$SHOT_BRANCH" -f sha="$base_sha" >/dev/null
-          fi
-
-          # 2. Upload the PNG (unique path per run, so no existing-blob SHA needed).
-          #    The base64 is ~1MB — too long for a CLI arg (128KB single-arg
-          #    limit), so build the JSON body in a file and pass it via --input.
-          dest="screenshots/pr-${PR}/vega-app-${GITHUB_RUN_ID}.png"
-          base64 -w0 "$SHOT" > "$RUNNER_TEMP/shot.b64"
-          jq -n \
-            --arg message "CI: Vega sample app screenshot for PR #${PR} (${SHA})" \
-            --arg branch "$SHOT_BRANCH" \
-            --rawfile content "$RUNNER_TEMP/shot.b64" \
-            '{message: $message, branch: $branch, content: $content}' > "$RUNNER_TEMP/put.json"
-          gh api -X PUT "repos/$REPO/contents/$dest" --input "$RUNNER_TEMP/put.json" >/dev/null
-          url="https://github.com/$REPO/raw/$SHOT_BRANCH/$dest"
-
-          # 3. Create or update the PR comment (dedup via the hidden marker).
-          body=$(printf '%s\n### Vega sample app screenshot\n\nBuilt from the `helloWorld` template and run on the VVD (commit `%s`).\n\n![Vega sample app](%s)\n' "$MARKER" "$SHA" "$url")
-          cid=$(gh api "repos/$REPO/issues/$PR/comments" --paginate \
-                  --jq ".[] | select(.body | contains(\"$MARKER\")) | .id" | head -n1 || true)
-          if [ -n "$cid" ]; then
-            gh api -X PATCH "repos/$REPO/issues/comments/$cid" -f body="$body" >/dev/null
-            echo "Updated comment $cid -> $url"
-          else
-            gh api "repos/$REPO/issues/$PR/comments" -f body="$body" >/dev/null
-            echo "Created comment -> $url"
-          fi
+        uses: ./.github/actions/pr-screenshot-comment
+        with:
+          github-token: ${{ github.token }}
+          marker: vega-sample-app-screenshot
+          title: Vega sample app screenshot
+          intro: "Built from the `${{ github.event.inputs.template || 'helloWorld' }}` template and run on the VVD (commit `${{ github.event.pull_request.head.sha }}`)."
+          images: artifacts/vega-app.png

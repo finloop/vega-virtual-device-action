@@ -1,0 +1,13 @@
+{
+  "name": "vvd-appium-navigation-test",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "WebdriverIO + Appium Vega Driver navigation test for the Vega Virtual Device.",
+  "scripts": {
+    "test": "node navigation_test.mjs"
+  },
+  "dependencies": {
+    "webdriverio": "^8.40.0"
+  }
+}

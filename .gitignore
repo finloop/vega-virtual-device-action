@@ -3,3 +3,10 @@
 /react-native-screens/
 /docker-android/
 /argent/
+
+# Node dependencies — examples/appium installs webdriverio at runtime; the
+# committed package.json + package-lock.json pin it, node_modules is not tracked.
+node_modules/
+
+# Local test artifacts produced by the example scripts.
+/artifacts/
