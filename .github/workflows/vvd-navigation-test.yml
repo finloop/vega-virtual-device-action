@@ -1,0 +1,119 @@
+name: VVD navigation screenshots
+
+# Boots the VVD via vega-virtual-device-action on a free GitHub-hosted runner and
+# navigates the pre-installed Kepler Video App with Argent — browse → carousels →
+# details → player → settings — capturing a screenshot at every step. Because the
+# VVD renders on Mesa llvmpipe (CPU), the run of non-black frames is a software-GL
+# rendering smoke test across focus changes and full screen transitions.
+#
+# Like vvd-action-test.yml this builds the host image here (PR-only) with the same
+# layer cache; on push to main / tags docker-publish.yml builds and publishes it.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'vega-virtual-device-action/**'
+      - 'scripts/**'
+      - 'examples/argent-navigation-test.sh'
+      - 'examples/lib/**'
+      - 'Dockerfile'
+      - '.sdk-version'
+      - '.github/workflows/vvd-navigation-test.yml'
+  workflow_dispatch:
+    inputs:
+      argent-tarball:
+        description: 'Argent release tarball URL to test (blank = pinned default below)'
+        required: false
+        default: ''
+
+# Single workflow-level source of the Argent tarball URL: a dispatch input
+# overrides it; pull_request runs (no inputs) fall back to this default.
+env:
+  ARGENT_TARBALL: ${{ github.event.inputs.argent-tarball || 'https://github.com/finloop/argent/releases/download/v0.10.2-vega/swmansion-argent-0.10.2-vega.tgz' }}
+
+jobs:
+  vvd-navigate:
+    name: Boot VVD, navigate app, screenshot each step
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          swap-storage: false
+
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build the host image locally so the test is self-contained and does not
+      # depend on the GHCR package already existing / being public. The layer cache
+      # (type=gha) reuses the expensive apt + Vega SDK layers:
+      #   - scope=host     reuses what docker-publish.yml pushed to the GHA cache.
+      #   - scope=host-ci  the PR smoke tests' shared warmth, so repeated pushes on
+      #                    a branch only rebuild changed layers.
+      - name: Build vega-virtual-device-host image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: vega-virtual-device-host:ci
+          cache-from: |
+            type=gha,scope=host
+            type=gha,scope=host-ci
+          cache-to: type=gha,mode=max,scope=host-ci
+
+      # One build, one boot: the action boots the VVD, then the script launches the
+      # Kepler Video App and walks it with Argent, screenshotting each step. The
+      # script exits non-zero if any required UI screen is black (rendering broke).
+      - name: Boot VVD; navigate Kepler Video App; screenshot each step
+        id: vvd
+        uses: ./vega-virtual-device-action
+        with:
+          image: vega-virtual-device-host:ci
+          pull: false
+          boot-timeout: 420
+          screenshot-path: artifacts/vvd-nav-final.png
+          container-options: -e ARGENT_TARBALL=${{ env.ARGENT_TARBALL }}
+          script: |
+            set -ex
+            bash examples/argent-navigation-test.sh
+
+      - name: Show outputs
+        if: always()
+        run: |
+          echo "boot-status=${{ steps.vvd.outputs.boot-status }}"
+          echo "screenshot=${{ steps.vvd.outputs.screenshot }}"
+
+      # The script writes its Markdown table to artifacts/summary.md ($GITHUB_STEP_SUMMARY
+      # is not visible inside the action's container), so surface it in the job summary here.
+      - name: Publish navigation summary
+        if: always()
+        run: |
+          if [ -f artifacts/summary.md ]; then
+            cat artifacts/summary.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No navigation summary produced (the script may have failed before reporting)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vvd-navigation-screenshots
+          path: artifacts/
+          if-no-files-found: warn
