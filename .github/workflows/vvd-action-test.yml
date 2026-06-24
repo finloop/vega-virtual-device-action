@@ -15,8 +15,10 @@ on:
       - 'vega-virtual-device-action/**'
       - 'scripts/**'
       - 'examples/argent-screenshot-test.sh'
+      - 'examples/lib/**'
       - 'Dockerfile'
       - '.sdk-version'
+      - '.github/actions/setup-vvd-host/**'
       - '.github/workflows/vvd-action-test.yml'
   workflow_dispatch:
     inputs:
@@ -41,62 +43,13 @@ jobs:
       contents: read
       packages: read
     steps:
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: false
-          swap-storage: false
-
       - uses: actions/checkout@v4
 
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # Read access to the GHCR registry build cache restored in the build below.
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Build the host image locally so the smoke test exercises THIS PR's
-      # Dockerfile/scripts changes (it can't just pull the published image).
-      #
-      # Two-tier cache:
-      #   - type=registry (…:buildcache) is the PRIMARY cache — written by
-      #     docker-publish.yml on push to main, never LRU-evicted, readable from
-      #     any PR. So the expensive apt + Vega SDK (get_vvm.sh) layers are a hit
-      #     on any PR that doesn't bump apt/node/.sdk-version: no installer re-run.
-      #   - type=gha scope=host-ci is SUPPLEMENTARY per-PR warmth (mode=min keeps
-      #     it small). If a PR *does* bump apt/node/.sdk-version, the first push
-      #     rebuilds the SDK layer and stores it here so later pushes on the SAME
-      #     PR branch don't re-download it. If this gha entry is evicted, the
-      #     registry cache still serves the (unchanged) SDK layer — eviction only
-      #     costs cheap top-layer warmth, never a flaky installer run.
-      - name: Build vega-virtual-device-host image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile
-          platforms: linux/amd64
-          load: true
-          tags: vega-virtual-device-host:ci
-          cache-from: |
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:buildcache
-            type=gha,scope=host-ci
-          cache-to: type=gha,mode=min,scope=host-ci
+      # Free disk, enable KVM, set up Buildx, log in to GHCR, and build
+      # vega-virtual-device-host:ci (shared registry build cache). See
+      # .github/actions/setup-vvd-host. (Needs the job's packages: read above.)
+      - name: Set up VVD host
+        uses: ./.github/actions/setup-vvd-host
 
       # One build, one boot: the action's script runs the VVD checks and then the
       # Argent Vega screenshot test; the action also captures its own screenshot.
