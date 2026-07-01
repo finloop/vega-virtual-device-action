@@ -6,8 +6,8 @@ name: Build sample Vega app
 # RELEASE vpkg, installs + launches it on the VVD, and screenshots the running app.
 #
 # Runs on PRs only (plus manual dispatch): like vvd-action-test.yml this builds the
-# host image locally so it is self-contained. On push to main / tags the image is
-# built and published by docker-publish.yml.
+# host image locally so it is self-contained — the same way the action builds it on
+# a consumer's runner, so it does not depend on any published image.
 on:
   pull_request:
     branches: [main]
@@ -33,11 +33,9 @@ jobs:
     # contents: write — the screenshot-comment action commits the PNG to its
     #   own branch (webpage-screenshot-action-branch).
     # pull-requests: write — to post the screenshot comment on the PR.
-    # packages: read — to RESTORE the registry build cache (the Vega SDK layer).
     permissions:
       contents: write
       pull-requests: write
-      packages: read
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -61,22 +59,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Read access to the GHCR registry build cache restored in the build below.
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # Build the host image locally (self-contained, like vvd-action-test.yml).
-      # Two-tier cache (see vvd-action-test.yml for the full rationale):
-      #   - type=registry (…:buildcache) — primary, written on push to main,
-      #     never evicted: the apt + Vega SDK (get_vvm.sh) layers hit on any PR
-      #     that doesn't bump apt/node/.sdk-version, so no installer re-run.
-      #   - type=gha scope=host-ci (mode=min) — supplementary per-PR warmth so a
-      #     PR that *does* bump the SDK doesn't re-download it on every push;
-      #     harmless if evicted (registry still serves the unchanged SDK layer).
+      # Build the host image locally (self-contained, like vvd-action-test.yml) —
+      # the same way the action builds it on a consumer's runner. GitHub Actions
+      # cache (scope shared with the action) reuses the expensive apt + Vega SDK
+      # (get_vvm.sh) layers across runs.
       - name: Build vega-virtual-device-host image
         uses: docker/build-push-action@v6
         with:
@@ -85,10 +71,8 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: vega-virtual-device-host:ci
-          cache-from: |
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:buildcache
-            type=gha,scope=host-ci
-          cache-to: type=gha,mode=min,scope=host-ci
+          cache-from: type=gha,scope=vega-vvd-host
+          cache-to: type=gha,mode=max,scope=vega-vvd-host
 
       # One build, one boot: scaffold from the template, build the RELEASE vpkg,
       # install + launch on the VVD; the action captures the screenshot afterwards.

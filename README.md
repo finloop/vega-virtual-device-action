@@ -1,9 +1,12 @@
 # vega-virtual-device-action
 
-CI/CD building blocks for **Amazon Vega** (React Native for Fire TV) apps — Docker
-images with the Vega SDK baked in, and a GitHub Action that boots the **Vega
-Virtual Device (VVD)** emulator on a **free GitHub-hosted runner** (no GPU, no
-self-hosted runner) and runs your scripts against a live device.
+CI/CD building blocks for **Amazon Vega** (React Native for Fire TV) apps — a
+GitHub Action that boots the **Vega Virtual Device (VVD)** emulator on a **free
+GitHub-hosted runner** (no GPU, no self-hosted runner) and runs your scripts
+against a live device. The action builds its Docker image (Vega SDK + VVD +
+software-GL stack) on your runner on first use, just like
+[`reactivecircus/android-emulator-runner`](https://github.com/ReactiveCircus/android-emulator-runner)
+installs the Android SDK.
 
 It is the Vega analogue of
 [`reactivecircus/android-emulator-runner`](https://github.com/ReactiveCircus/android-emulator-runner).
@@ -26,22 +29,20 @@ It is the Vega analogue of
 | [`scripts/`](scripts/) | [`start-vvd.sh`](scripts/start-vvd.sh) (boots the VVD non-black) and [`vvd-screenshot.sh`](scripts/vvd-screenshot.sh) (captures via the emulator console). Baked into the full image at `/scripts`. |
 | [`examples/`](examples/) | Scripts that drive the booted VVD with [Argent](https://github.com/finloop/argent): [`argent-screenshot-test.sh`](examples/argent-screenshot-test.sh) (capture one screenshot) and [`argent-navigation-test.sh`](examples/argent-navigation-test.sh) (navigate the pre-installed Kepler Video App — browse → details → player → settings — screenshotting each step as a software-GL render check). Shared bootstrap in [`lib/argent-common.sh`](examples/lib/argent-common.sh). An **Appium** variant — [`appium-navigation-test.sh`](examples/appium-navigation-test.sh) + [`appium/`](examples/appium/) — drives the same app with WebdriverIO and the Vega kepler driver. |
 | [`docs/`](docs/) | [`vvd-docker-screenshot-fix.md`](docs/vvd-docker-screenshot-fix.md) — full walkthrough of the no-GPU screen-capture fix and the dead-ends behind it. |
-| [`.github/workflows/`](.github/workflows/) | `docker-publish.yml` (build + push both images to GHCR), `vvd-action-test.yml` (end-to-end smoke test of the action), `vvd-navigation-test.yml` (navigate the Kepler Video App with Argent) and `vvd-appium-test.yml` (navigate it with Appium). |
+| [`.github/workflows/`](.github/workflows/) | `docker-publish.yml` (**disabled** — no longer publishes images), `vvd-action-test.yml` (end-to-end smoke test of the action), `vvd-navigation-test.yml` (navigate the Kepler Video App with Argent) and `vvd-appium-test.yml` (navigate it with Appium). |
 
 ## Images
 
-Both images are published to GHCR by [`docker-publish.yml`](.github/workflows/docker-publish.yml)
-on push to `main` and on `v*` tags. The SDK version is centralized in
-[`.sdk-version`](.sdk-version) — see [Maintaining the SDK version](vega-virtual-device-action/README.md#maintaining-the-sdk-version).
+The action builds the `vega-virtual-device-host` image on your runner from
+[`Dockerfile`](Dockerfile); it is **not** published from this repo. The build is
+cached via the GitHub Actions cache. The SDK version is centralized in
+[`.sdk-version`](.sdk-version) — see
+[Maintaining the SDK version](vega-virtual-device-action/README.md#maintaining-the-sdk-version).
 
-| Image | Tags | Contains | Use for |
+| Image | Built from | Contains | Use for |
 |---|---|---|---|
-| `ghcr.io/<owner>/vega-virtual-device-host` | `latest`, `sdk-<version>` | Vega SDK, VVD emulator, Node 20, adb, Mesa llvmpipe + Xvfb | Booting a device — UI tests, screenshots, Argent runs |
-| `ghcr.io/<owner>/vega-sdk-builder` | `latest`, `sdk-<version>` | Vega SDK, Node, npm | Build / lint / unit tests (no device) |
-
-> **Note:** GHCR packages default to **private**. Consumers either make the
-> package public or add `permissions: packages: read` + a `docker/login-action`
-> step (shown in the action README).
+| `vega-virtual-device-host` | [`Dockerfile`](Dockerfile) | Vega SDK, VVD emulator, Node 20, adb, Mesa llvmpipe + Xvfb | Booting a device — UI tests, screenshots, Argent runs |
+| `vega-sdk-builder` | [`Dockerfile.build-only`](Dockerfile.build-only) | Vega SDK, Node, npm | Build / lint / unit tests (no device) |
 
 ## Quick start (GitHub Actions)
 
@@ -52,9 +53,6 @@ jobs:
   vvd-test:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
-    permissions:
-      contents: read
-      packages: read          # to pull the host image from GHCR
     steps:
       - uses: actions/checkout@v4
 
@@ -69,7 +67,6 @@ jobs:
         id: vvd
         uses: <owner>/vega-virtual-device-action/vega-virtual-device-action@main
         with:
-          image: ghcr.io/<owner>/vega-virtual-device-host:latest
           screenshot-path: artifacts/home.png
           script: |
             # device is live here; vega / vda / vvd-screenshot.sh are on PATH
@@ -82,6 +79,10 @@ jobs:
           name: vvd-artifacts
           path: artifacts/
 ```
+
+> The action builds the host image on your runner the first time it runs and caches
+> the build via the GitHub Actions cache. No GHCR login or `image:` reference is
+> needed.
 
 Full input/output reference and a deeper explanation of how it works are in the
 [action README](vega-virtual-device-action/README.md).
