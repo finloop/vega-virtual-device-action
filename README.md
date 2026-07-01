@@ -29,7 +29,7 @@ It is the Vega analogue of
 | [`scripts/`](scripts/) | [`start-vvd.sh`](scripts/start-vvd.sh) (boots the VVD non-black) and [`vvd-screenshot.sh`](scripts/vvd-screenshot.sh) (captures via the emulator console). Baked into the full image at `/scripts`. |
 | [`examples/`](examples/) | Scripts that drive the booted VVD with [Argent](https://github.com/finloop/argent): [`argent-screenshot-test.sh`](examples/argent-screenshot-test.sh) (capture one screenshot) and [`argent-navigation-test.sh`](examples/argent-navigation-test.sh) (navigate the pre-installed Kepler Video App — browse → details → player → settings — screenshotting each step as a software-GL render check). Shared bootstrap in [`lib/argent-common.sh`](examples/lib/argent-common.sh). An **Appium** variant — [`appium-navigation-test.sh`](examples/appium-navigation-test.sh) + [`appium/`](examples/appium/) — drives the same app with WebdriverIO and the Vega kepler driver. |
 | [`docs/`](docs/) | [`vvd-docker-screenshot-fix.md`](docs/vvd-docker-screenshot-fix.md) — full walkthrough of the no-GPU screen-capture fix and the dead-ends behind it. |
-| [`.github/workflows/`](.github/workflows/) | `docker-publish.yml` (**disabled** — no longer publishes images), `vvd-action-test.yml` (end-to-end smoke test of the action), `vvd-navigation-test.yml` (navigate the Kepler Video App with Argent) and `vvd-appium-test.yml` (navigate it with Appium). |
+| [`.github/workflows/`](.github/workflows/) | `vvd-action-test.yml` (end-to-end smoke test of the action), `vvd-navigation-test.yml` (navigate the Kepler Video App with Argent) and `vvd-appium-test.yml` (navigate it with Appium). |
 
 ## Images
 
