@@ -3,13 +3,10 @@
 CI/CD building blocks for **Amazon Vega** (React Native for Fire TV) apps — a
 GitHub Action that boots the **Vega Virtual Device (VVD)** emulator on a **free
 GitHub-hosted runner** (no GPU, no self-hosted runner) and runs your scripts
-against a live device. The action builds its Docker image (Vega SDK + VVD +
-software-GL stack) on your runner on first use, just like
-[`reactivecircus/android-emulator-runner`](https://github.com/ReactiveCircus/android-emulator-runner)
-installs the Android SDK.
-
-It is the Vega analogue of
-[`reactivecircus/android-emulator-runner`](https://github.com/ReactiveCircus/android-emulator-runner).
+against a live device. It is the Vega analogue of
+[`reactivecircus/android-emulator-runner`](https://github.com/ReactiveCircus/android-emulator-runner):
+the action builds its Docker image (Vega SDK + VVD + software-GL stack) on your
+runner on first use, the way android-emulator-runner sets up the Android SDK.
 
 ![VVD screenshot captured in Docker with no GPU](docs/vvd-docker-screenshot.png)
 
@@ -33,9 +30,11 @@ It is the Vega analogue of
 
 ## Images
 
-The action builds the `vega-virtual-device-host` image on your runner from
-[`Dockerfile`](Dockerfile); it is **not** published from this repo. The build is
-cached via the GitHub Actions cache. The SDK version is centralized in
+Neither image is published from this repo — both are built on demand from their
+Dockerfiles. The action builds `vega-virtual-device-host` on your runner
+automatically (cached via the GitHub Actions cache); `vega-sdk-builder` can be
+built from [`Dockerfile.build-only`](Dockerfile.build-only) for build/lint/test
+jobs that don't need a device. The SDK version is centralized in
 [`.sdk-version`](.sdk-version) — see
 [Maintaining the SDK version](vega-virtual-device-action/README.md#maintaining-the-sdk-version).
 
@@ -110,8 +109,8 @@ Requires Docker with Buildx, and `--privileged --device /dev/kvm --init` to *run
 the host image (see the docs for why each flag is needed).
 
 ```bash
-# Build both images (full + build-only)
-docker buildx bake --set "*.tags=vega-virtual-device-host:local" full
+# Build the host (full) image
+docker buildx bake --set "full.tags=vega-virtual-device-host:local" full
 
 # Run the host image and capture a screenshot
 docker run -d --name vvd --privileged --device /dev/kvm --init \
