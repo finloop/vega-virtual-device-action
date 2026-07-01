@@ -11,14 +11,16 @@ runner required (see [No GPU needed](#no-gpu-needed)).
 
 ## Usage
 
+No image reference and no registry login: the action builds the
+`vega-virtual-device-host` image on your runner the first time it runs and caches
+the build via the GitHub Actions cache, like `android-emulator-runner` does for the
+Android SDK.
+
 ```yaml
 jobs:
   vvd-test:
     runs-on: ubuntu-22.04
     timeout-minutes: 60
-    permissions:
-      contents: read
-      packages: read          # to pull the image from GHCR
     steps:
       - uses: actions/checkout@v4
 
@@ -29,18 +31,10 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Log in to GHCR   # only needed if the image package is private
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Boot VVD and run tests
         id: vvd
-        uses: <owner>/vegaos-cicd/vega-virtual-device-action@main
+        uses: <owner>/vega-virtual-device-action/vega-virtual-device-action@main
         with:
-          image: ghcr.io/<owner>/vega-virtual-device-host:latest
           boot-timeout: 300
           screenshot-path: artifacts/home.png
           script: |
@@ -60,13 +54,13 @@ jobs:
 | Input | Default | Description |
 |---|---|---|
 | `script` | _(required)_ | Command(s) run inside the container once the VVD is ready. `vega`, `vda`, `vvd-screenshot.sh` are on `PATH`; cwd is the checkout (or `working-directory`). |
-| `image` | `ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:latest` | The `vega-virtual-device-host` image to run. Pin to `:sdk-<version>` for a reproducible SDK. |
+| `image` | _(empty)_ | Optional. An existing `vega-virtual-device-host` image to run instead of building. Empty (default) → the action builds the image locally from its bundled Dockerfile and caches it via the GitHub Actions cache. Set only if you host your own image. |
 | `boot-timeout` | `300` | Seconds to wait for a ready (non-black) home screen before failing. |
 | `working-directory` | `.` | Sub-directory of the checkout to `cd` into for the script (and where `screenshot-path` is resolved). |
 | `pre-launch-script` | `''` | Optional command(s) run inside the container **before** the VVD starts. |
 | `capture-screenshot` | `true` | Capture a screenshot after the script (and on boot/run failure). |
 | `screenshot-path` | `vvd-screenshot.png` | Where to write the screenshot, relative to `working-directory`. |
-| `pull` | `true` | `docker pull` the image before running. |
+| `pull` | `true` | When `image` is set, `docker pull` it before running. Ignored when the action builds the image locally. |
 | `container-options` | `''` | Extra flags appended to `docker run` (advanced) — e.g. additional `-v`/`-e`. |
 
 ## Outputs
@@ -122,10 +116,12 @@ requires.
 
 ## Notes & caveats
 
-- **GHCR image visibility.** GHCR packages default to **private**. If the
-  `vega-virtual-device-host` package is private, the consumer workflow needs
-  `permissions: packages: read` plus the `docker/login-action` step shown above. If
-  you make the package public, you can drop the login step.
+- **Image is built on your runner.** By default the action builds the
+  `vega-virtual-device-host` image from its bundled Dockerfile on your runner, like
+  `android-emulator-runner` sets up the Android SDK. The build is cached via the
+  GitHub Actions cache, so only the first run pays the full build; later runs
+  restore the build layers. No GHCR login or `packages:` permission is needed. Pass
+  `image:` only to run your own pre-built image.
 - **First-boot download.** The ~22 MB emulator binary is downloaded on the first
   `vega virtual-device start` *inside the container*; `boot-timeout` must cover
   that download plus a cold llvmpipe boot. `300` s is a safe default.
@@ -135,18 +131,14 @@ requires.
 ## Maintaining the SDK version
 
 The Vega SDK version is centralized in a single file at the repo root,
-**`.sdk-version`**. The Dockerfiles read it at build time and the publisher uses it
-for the `:sdk-<version>` image tag — nothing else hardcodes it (a CI check enforces
-this). To bump it:
+**`.sdk-version`**. The Dockerfiles read it at build time — nothing else hardcodes
+it (a CI check enforces this). To bump it:
 
 ```bash
 tools/bump-sdk-version.sh            # write the latest (isLatest) SDK
 tools/bump-sdk-version.sh 0.22.9999  # or pin an explicit version
 ```
 
-Then open a PR. Merging to `main` publishes `:latest` and `:sdk-<new>`; to also
-publish versioned images, push a release tag:
-
-```bash
-git tag v0.0.2 && git push origin v0.0.2
-```
+Then open a PR. The action builds the host image from `.sdk-version` on each
+consumer's runner, so consumers pick up the new SDK version once they update the
+action ref — no image is published from this repo.

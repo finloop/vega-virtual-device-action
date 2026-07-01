@@ -9,7 +9,8 @@ name: VVD Appium navigation screenshots
 # (Mesa llvmpipe) VVD.
 #
 # Like vvd-action-test.yml this builds the host image here (PR-only) with the same
-# layer cache; on push to main / tags docker-publish.yml builds and publishes it.
+# layer cache — the same way the action builds it on a consumer's runner, so it
+# does not depend on any published image.
 on:
   pull_request:
     branches: [main]
@@ -58,11 +59,9 @@ jobs:
     # contents: write — the screenshot-comment step commits the PNGs to a dedicated
     #   ci-screenshots branch (so they can be embedded inline).
     # pull-requests: write — to post/update the screenshot comment on the PR.
-    # packages: read — to RESTORE the registry build cache written by docker-publish.yml.
     permissions:
       contents: write
       pull-requests: write
-      packages: read
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@main
@@ -86,18 +85,10 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Read access to the GHCR registry build cache restored in the build below.
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       # Build the host image locally so the test exercises THIS PR's Dockerfile /
-      # scripts. Two-tier cache (same as vvd-action-test.yml): the registry
-      # buildcache (written by docker-publish.yml) serves the expensive apt + Vega
-      # SDK layers; gha scope=host-ci is supplementary per-PR warmth.
+      # scripts — the same way the action builds it on a consumer's runner. GitHub
+      # Actions cache (scope shared with the action) reuses the expensive apt +
+      # Vega SDK layers across runs.
       - name: Build vega-virtual-device-host image
         uses: docker/build-push-action@v6
         with:
@@ -106,10 +97,8 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: vega-virtual-device-host:ci
-          cache-from: |
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:buildcache
-            type=gha,scope=host-ci
-          cache-to: type=gha,mode=min,scope=host-ci
+          cache-from: type=gha,scope=vega-vvd-host
+          cache-to: type=gha,mode=max,scope=vega-vvd-host
 
       # Fetch the prebuilt app vpkg onto the runner (gh is available here, not in
       # the action container). It lands under the checkout, which the action mounts

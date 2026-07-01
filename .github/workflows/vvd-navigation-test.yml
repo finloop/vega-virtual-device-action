@@ -7,7 +7,8 @@ name: VVD navigation screenshots
 # rendering smoke test across focus changes and full screen transitions.
 #
 # Like vvd-action-test.yml this builds the host image here (PR-only) with the same
-# layer cache; on push to main / tags docker-publish.yml builds and publishes it.
+# layer cache — the same way the action builds it on a consumer's runner, so it
+# does not depend on any published image.
 on:
   pull_request:
     branches: [main]
@@ -72,11 +73,9 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       # Build the host image locally so the test is self-contained and does not
-      # depend on the GHCR package already existing / being public. The layer cache
-      # (type=gha) reuses the expensive apt + Vega SDK layers:
-      #   - scope=host     reuses what docker-publish.yml pushed to the GHA cache.
-      #   - scope=host-ci  the PR smoke tests' shared warmth, so repeated pushes on
-      #                    a branch only rebuild changed layers.
+      # depend on any published image — the same way the action builds it on a
+      # consumer's runner. GitHub Actions cache (scope shared with the action and
+      # the other workflows) reuses the expensive apt + Vega SDK layers across runs.
       - name: Build vega-virtual-device-host image
         uses: docker/build-push-action@v6
         with:
@@ -85,10 +84,8 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: vega-virtual-device-host:ci
-          cache-from: |
-            type=gha,scope=host
-            type=gha,scope=host-ci
-          cache-to: type=gha,mode=max,scope=host-ci
+          cache-from: type=gha,scope=vega-vvd-host
+          cache-to: type=gha,mode=max,scope=vega-vvd-host
 
       # Fetch the prebuilt app vpkg onto the runner (gh is available here, not in the
       # action container). It lands under the checkout, which the action mounts at

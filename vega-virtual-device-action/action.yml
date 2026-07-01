@@ -13,9 +13,14 @@ inputs:
     description: 'Command(s) to run inside the container once the VVD is booted and ready. Has vega, vda, vvd-screenshot.sh on PATH; cwd is the mounted checkout (or working-directory).'
     required: true
   image:
-    description: 'vega-virtual-device-host image reference to run.'
+    description: >-
+      Optional. An existing vega-virtual-device-host image to run instead of
+      building one. Leave empty (the default) to have the action build the image
+      locally from its bundled Dockerfile and cache it via the GitHub Actions
+      cache, like reactivecircus/android-emulator-runner does for the Android SDK.
+      Set this only if you host your own image.
     required: false
-    default: 'ghcr.io/${{ github.repository_owner }}/vega-virtual-device-host:latest'
+    default: ''
   boot-timeout:
     description: 'Seconds to wait for the VVD to reach a ready (non-black) home screen before failing.'
     required: false
@@ -37,7 +42,7 @@ inputs:
     required: false
     default: 'vvd-screenshot.png'
   pull:
-    description: 'docker pull the image before running. true/false.'
+    description: 'When `image` is set, docker pull it before running. true/false. Ignored when the action builds the image locally (image empty).'
     required: false
     default: 'true'
   container-options:
@@ -56,8 +61,32 @@ outputs:
 runs:
   using: composite
   steps:
+    # No image override → build the host image locally from the bundled
+    # Dockerfile, cached via the GitHub Actions cache so only the first run pays
+    # the full build. Mirrors how android-emulator-runner sets up the Android SDK
+    # on the runner. The action repo (with Dockerfile, scripts/, .sdk-version)
+    # lives at ${{ github.action_path }}/.. — independent of the consumer's own
+    # checkout.
+    - name: Set up Docker Buildx
+      if: ${{ inputs.image == '' }}
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build vega-virtual-device-host image
+      if: ${{ inputs.image == '' }}
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ github.action_path }}/..
+        file: ${{ github.action_path }}/../Dockerfile
+        platforms: linux/amd64
+        load: true
+        tags: vega-virtual-device-host:local
+        cache-from: type=gha,scope=vega-vvd-host
+        cache-to: type=gha,mode=max,scope=vega-vvd-host
+
+    # Only an explicit image override may need pulling; the locally-built image
+    # is already loaded into the daemon.
     - name: Pull vega-virtual-device-host image
-      if: ${{ inputs.pull != 'false' }}
+      if: ${{ inputs.image != '' && inputs.pull != 'false' }}
       shell: bash
       run: docker pull "${{ inputs.image }}"
 
@@ -65,7 +94,7 @@ runs:
       id: run
       shell: bash
       env:
-        VVD_IMAGE: ${{ inputs.image }}
+        VVD_IMAGE: ${{ inputs.image != '' && inputs.image || 'vega-virtual-device-host:local' }}
         VVD_SCRIPT: ${{ inputs.script }}
         VVD_PRE_LAUNCH: ${{ inputs.pre-launch-script }}
         VVD_BOOT_TIMEOUT: ${{ inputs.boot-timeout }}
